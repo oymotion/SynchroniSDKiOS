@@ -150,12 +150,11 @@ class ViewController: UIViewController , SensorControllerDelegate {
     @IBAction func onTest(_ sender: Any) {
         Task{
             for sensorData in self.sensorDataCtxs {
-                if (sensorData.value.profile.state == BLEState.ready){
+                if (sensorData.value.profile.hasInit){
                     if (sensorData.value.profile.hasStartDataNotification){
                         await sensorData.value.profile.stopDataNotification(TIMEOUT);
                     }else{
-                        await
-                            sensorData.value.profile.startDataNotification(TIMEOUT);
+                        await sensorData.value.profile.startDataNotification(TIMEOUT);
                     }
                     print("set data notify result: " + String(sensorData.value.profile.hasStartDataNotification));
                 }
@@ -171,8 +170,8 @@ class ViewController: UIViewController , SensorControllerDelegate {
                     let sensorProfile = controller?.getSensor(bleDevice.macAddress);
                     let sensorDataCtx = SensorDataContext(profile : sensorProfile)
                     sensorDataCtxs[bleDevice.macAddress] = sensorDataCtx;
-                    print("Found: " + bleDevice.name + " : " + String(bleDevice.rssi.intValue))
                 }
+                print("Found: " + bleDevice.name + " : " + String(bleDevice.rssi.intValue))
             }
         }
     }

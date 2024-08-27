@@ -8,9 +8,10 @@ Application will obtain bluetooth permission by itself.
 
 ## 2. Import SDK
 
+please add sensor.xcframework to project
+
 ```swift
 import sensor
-
 ```
 
 ## 3. Initalize
@@ -45,12 +46,8 @@ class ViewController: UIViewController , SensorControllerDelegate {
 
 ```swift
 SensorController.startScan(TIMEOUT)
-```
-
-`onSensorScanResult(_ bleDevices: [BLEPeripheral])` 
-returns array of BLEPeripheral
-
-```swift
+//returns array of BLEPeripheral
+onSensorScanResult(_ bleDevices: [BLEPeripheral]){
     for bleDevice in bleDevices {
         if (bleDevice.name.hasPrefix("SYNC")){
             if (sensorDataCtxs[bleDevice.macAddress] == nil){
@@ -61,6 +58,8 @@ returns array of BLEPeripheral
             }
         }
     }
+}
+
 ```
 
 ## 5. Stop scan
@@ -84,8 +83,9 @@ SensorProfile.disconnect()
 ```
 
 
-## 8. Get device status
+## 8. Device status
 
+### 8.1 Get device status
 ```swift
 SensorProfile.state;
 ```
@@ -103,6 +103,18 @@ typedef NS_ENUM(NSInteger, BLEState)
 };
 ```
 
+### 8.2 Get device status change 
+```swift
+func onSensorStateChange(_ newState: BLEState) {
+    print("Device: " + profile.device.name + " state: " + profile.stateString)
+    if (newState == BLEState.unConnected || newState == BLEState.invalid){
+        print("Reset device: " + profile.device.name);
+    }else if (newState == BLEState.ready && !profile.hasInit){
+        
+    }
+}
+```
+    
 ## 9. DataNotify
 
 ### 9.1 init data notify
