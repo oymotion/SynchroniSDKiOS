@@ -13,11 +13,19 @@
 #import <sensor/defines.h>
 
 @interface DeviceInfo : NSObject
-@property (atomic, assign) int MTUSize;
+
 @property (atomic, strong) NSString* deviceName;
 @property (atomic, strong) NSString* modelName;
 @property (atomic, strong) NSString* hardwareVersion;
 @property (atomic, strong) NSString* firmwareVersion;
+@property (atomic, assign) int MTUSize;
+@property (atomic, assign) bool isMTUFine;
+@property (atomic, assign) int EEGChannelCount;
+@property (atomic, assign) int ECGChannelCount;
+@property (atomic, assign) int BRTHChannelCount;
+@property (atomic, assign) int AccChannelCount;
+@property (atomic, assign) int GyroChannelCount;
+
 @end
 
 @interface Sample : NSObject
@@ -63,15 +71,7 @@
 @property (atomic, assign, readonly) BLEState state;
 @property (atomic, readonly) NSString* stateString;
 @property (atomic, strong, readonly) BLEPeripheral* device;
-@property (atomic, assign, readonly) bool hasEEG;
-@property (atomic, assign, readonly) bool hasECG;
 @property (atomic, assign, readonly) bool hasInit;
-@property (atomic, assign, readonly) bool isMTUFine;
-@property (atomic, assign, readonly) int EEGChannelCount;
-@property (atomic, assign, readonly) int ECGChannelCount;
-@property (atomic, assign, readonly) int BRTHChannelCount;
-@property (atomic, assign, readonly) int AccChannelCount;
-@property (atomic, assign, readonly) int GyroChannelCount;
 @property (atomic, assign, readonly) bool hasStartDataNotification;
 
 
