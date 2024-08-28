@@ -71,6 +71,7 @@
 @property (atomic, assign, readonly) BLEState state;
 @property (atomic, readonly) NSString* stateString;
 @property (atomic, strong, readonly) BLEPeripheral* device;
+@property (atomic, strong, readonly) DeviceInfo* deviceInfo;
 @property (atomic, assign, readonly) bool hasInit;
 @property (atomic, assign, readonly) bool hasStartDataNotification;
 
