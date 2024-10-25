@@ -14,6 +14,6 @@ FOUNDATION_EXPORT double sensorVersionNumber = 1;
 
 FOUNDATION_EXPORT const unsigned char sensorVersionString[] = "1.0";
 
-#import <sensor/sensorProfile.h>
+#import <sensor/SensorProfile.h>
 #import <sensor/SensorController.h>
 #endif /* sensorOC_Bridge_h */

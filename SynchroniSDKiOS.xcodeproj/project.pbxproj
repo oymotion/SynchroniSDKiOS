@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B9F10BD32CCA4C0E008944EA /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B9F10BD22CCA4C0E008944EA /* main.cpp */; };
+		B9F10BD82CCA4C32008944EA /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9FFA94B2C7B048100DBA2AD /* sensor.xcframework */; };
 		B9FFA9382C7B025D00DBA2AD /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FFA9372C7B025D00DBA2AD /* AppDelegate.swift */; };
 		B9FFA93A2C7B025D00DBA2AD /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FFA9392C7B025D00DBA2AD /* SceneDelegate.swift */; };
 		B9FFA93C2C7B025D00DBA2AD /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FFA93B2C7B025D00DBA2AD /* ViewController.swift */; };
@@ -16,7 +18,21 @@
 		B9FFA94C2C7B048200DBA2AD /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9FFA94B2C7B048100DBA2AD /* sensor.xcframework */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		B9F10BCE2CCA4C0D008944EA /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		B9F10BD02CCA4C0D008944EA /* commandTest */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = commandTest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B9F10BD22CCA4C0E008944EA /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		B9FFA9342C7B025D00DBA2AD /* SynchroniSDKiOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SynchroniSDKiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9FFA9372C7B025D00DBA2AD /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B9FFA9392C7B025D00DBA2AD /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
@@ -29,6 +45,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		B9F10BCD2CCA4C0D008944EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B9F10BD82CCA4C32008944EA /* sensor.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B9FFA9312C7B025D00DBA2AD /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -40,12 +64,29 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B9F10BD12CCA4C0D008944EA /* commandTest */ = {
+			isa = PBXGroup;
+			children = (
+				B9F10BD22CCA4C0E008944EA /* main.cpp */,
+			);
+			path = commandTest;
+			sourceTree = "<group>";
+		};
+		B9F10BD72CCA4C32008944EA /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		B9FFA92B2C7B025D00DBA2AD = {
 			isa = PBXGroup;
 			children = (
 				B9FFA94B2C7B048100DBA2AD /* sensor.xcframework */,
 				B9FFA9362C7B025D00DBA2AD /* SynchroniSDKiOS */,
+				B9F10BD12CCA4C0D008944EA /* commandTest */,
 				B9FFA9352C7B025D00DBA2AD /* Products */,
+				B9F10BD72CCA4C32008944EA /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -53,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				B9FFA9342C7B025D00DBA2AD /* SynchroniSDKiOS.app */,
+				B9F10BD02CCA4C0D008944EA /* commandTest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -74,6 +116,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		B9F10BCF2CCA4C0D008944EA /* commandTest */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B9F10BD62CCA4C0E008944EA /* Build configuration list for PBXNativeTarget "commandTest" */;
+			buildPhases = (
+				B9F10BCC2CCA4C0D008944EA /* Sources */,
+				B9F10BCD2CCA4C0D008944EA /* Frameworks */,
+				B9F10BCE2CCA4C0D008944EA /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = commandTest;
+			productName = commandTest;
+			productReference = B9F10BD02CCA4C0D008944EA /* commandTest */;
+			productType = "com.apple.product-type.tool";
+		};
 		B9FFA9332C7B025D00DBA2AD /* SynchroniSDKiOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B9FFA9482C7B026000DBA2AD /* Build configuration list for PBXNativeTarget "SynchroniSDKiOS" */;
@@ -101,6 +160,9 @@
 				LastSwiftUpdateCheck = 1410;
 				LastUpgradeCheck = 1410;
 				TargetAttributes = {
+					B9F10BCF2CCA4C0D008944EA = {
+						CreatedOnToolsVersion = 14.1;
+					};
 					B9FFA9332C7B025D00DBA2AD = {
 						CreatedOnToolsVersion = 14.1;
 					};
@@ -120,6 +182,7 @@
 			projectRoot = "";
 			targets = (
 				B9FFA9332C7B025D00DBA2AD /* SynchroniSDKiOS */,
+				B9F10BCF2CCA4C0D008944EA /* commandTest */,
 			);
 		};
 /* End PBXProject section */
@@ -138,6 +201,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B9F10BCC2CCA4C0D008944EA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B9F10BD32CCA4C0E008944EA /* main.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B9FFA9302C7B025D00DBA2AD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -170,6 +241,30 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		B9F10BD42CCA4C0E008944EA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VT7SC62W2Y;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.7;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		B9F10BD52CCA4C0E008944EA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VT7SC62W2Y;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.7;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
 		B9FFA9462C7B026000DBA2AD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -347,6 +442,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		B9F10BD62CCA4C0E008944EA /* Build configuration list for PBXNativeTarget "commandTest" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B9F10BD42CCA4C0E008944EA /* Debug */,
+				B9F10BD52CCA4C0E008944EA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		B9FFA92F2C7B025D00DBA2AD /* Build configuration list for PBXProject "SynchroniSDKiOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

@@ -57,11 +57,7 @@
 -(NSArray<SensorData*>*)flushSamples;
 @end
 
-@protocol SensorProfileDelegate
-- (void)onSensorErrorCallback: (NSError*)err;
-- (void)onSensorStateChange: (BLEState)newState;
-- (void)onSensorNotifyData:(SensorData*) rawData;
-@end
+@protocol SensorProfileDelegate;
 
 @interface SensorProfile : NSObject
 {
@@ -81,17 +77,25 @@
 -(BOOL)startDataNotification;
 -(BOOL)stopDataNotification;
 
-- (void)initAll:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)initEEG:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)initECG:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)initIMU:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)initBRTH:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)initDataTransfer:(BOOL)isGetFeature  timeout:(NSTimeInterval)timeout completion:(void (^)(int flag))completionHandler;
-- (void)getBattery:(NSTimeInterval)timeout completion:(void (^)(int battery))completionHandler;
-- (void)getDeviceInfo:(BOOL)onlyMTU timeout:(NSTimeInterval)timeout completion:(void (^)(DeviceInfo* deviceInfo))completionHandler;
-- (void)startDataNotification:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
-- (void)stopDataNotification:(NSTimeInterval)timeout completion:(void (^)(BOOL success))completionHandler;
+- (void)initAll:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)initEEG:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)initECG:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)initIMU:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)initBRTH:(int)packageCount timeout:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)initDataTransfer:(BOOL)isGetFeature  timeout:(NSTimeInterval)timeout completion:(void (^)(int flag, NSError * err))completionHandler;
+- (void)getBattery:(NSTimeInterval)timeout completion:(void (^)(int battery, NSError * err))completionHandler;
+- (void)getDeviceInfo:(BOOL)onlyMTU timeout:(NSTimeInterval)timeout completion:(void (^)(DeviceInfo* deviceInfo, NSError * err))completionHandler;
+- (void)startDataNotification:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
+- (void)stopDataNotification:(NSTimeInterval)timeout completion:(void (^)(BOOL success, NSError * err))completionHandler;
 
+- (void)setParam:(NSTimeInterval)timeout key:(NSString*_Nonnull)key value:(NSString*_Nonnull)value completion:(void (^_Nonnull)(NSString*_Nonnull result, NSError * _Nullable err))completionHandler;
+
+@end
+
+@protocol SensorProfileDelegate
+- (void)onSensorErrorCallback:(SensorProfile*_Nonnull)profile err:(NSError*_Nonnull)err;
+- (void)onSensorStateChange:(SensorProfile*_Nonnull)profile newState:(BLEState)newState;
+- (void)onSensorNotifyData:(SensorProfile*_Nonnull)profile rawData:(SensorData*_Nonnull) rawData;
 @end
 
 #endif

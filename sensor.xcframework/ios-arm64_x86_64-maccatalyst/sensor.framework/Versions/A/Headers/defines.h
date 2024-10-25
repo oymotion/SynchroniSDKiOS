@@ -149,6 +149,7 @@ typedef NS_ENUM(NSInteger, BLEState)
     BLEStateConnecting,
     BLEStateConnected,
     BLEStateReady,
+    BLEStateDisconnecting,
     BLEStateInvalid,
 };
 

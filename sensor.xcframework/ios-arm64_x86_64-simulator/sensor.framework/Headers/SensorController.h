@@ -6,11 +6,12 @@
 //
 
 #import <Foundation/Foundation.h>
-#import <sensor/sensorProfile.h>
+#import <sensor/SensorProfile.h>
 NS_ASSUME_NONNULL_BEGIN
 
 
 @protocol SensorControllerDelegate
+- (void)onSensorControllerEnableChange:(bool)enabled;
 - (void)onSensorScanResult:(NSArray<BLEPeripheral*>*) bleDevices;
 @end
 
@@ -21,7 +22,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (atomic, assign, readonly) bool isEnable;
 @property (atomic, assign, readonly) bool isScaning;
 + (instancetype)getInstance;
-
++ (void)destory;
 
 -(BLEPeripheral*)getDevice:(NSString*)deviceMac;
 -(SensorProfile*)getSensor:(NSString*)deviceMac;
