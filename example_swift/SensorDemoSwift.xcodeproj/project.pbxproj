@@ -1,0 +1,318 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA0000000000000000000101 /* SensorDemoSwiftApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* SensorDemoSwiftApp.swift */; };
+		AA0000000000000000000102 /* Model/AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* Model/AppModel.swift */; };
+		AA0000000000000000000103 /* Model/DeviceState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* Model/DeviceState.swift */; };
+		AA0000000000000000000104 /* Views/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000204 /* Views/ContentView.swift */; };
+		AA0000000000000000000105 /* Views/DevicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000205 /* Views/DevicePage.swift */; };
+		AA0000000000000000000106 /* Views/BioPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000206 /* Views/BioPage.swift */; };
+		AA0000000000000000000107 /* Views/ImuPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000207 /* Views/ImuPage.swift */; };
+		AA0000000000000000000108 /* Views/WaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000208 /* Views/WaveformView.swift */; };
+		AA0000000000000000000109 /* Views/CubeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000209 /* Views/CubeView.swift */; };
+		AA000000000000000000010D /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020D /* sensor.xcframework */; };
+		AA000000000000000000010E /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020E /* CoreBluetooth.framework */; };
+		AA0000000000000000000114 /* Model/LiveFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000214 /* Model/LiveFilter.swift */; };
+		AA0000000000000000000115 /* Model/SpectrumCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000215 /* Model/SpectrumCompute.swift */; };
+		AA0000000000000000000116 /* Views/SpectrumView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000216 /* Views/SpectrumView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA0000000000000000000201 /* SensorDemoSwiftApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorDemoSwiftApp.swift; sourceTree = "<group>"; };
+		AA0000000000000000000202 /* Model/AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/AppModel.swift; sourceTree = "<group>"; };
+		AA0000000000000000000203 /* Model/DeviceState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/DeviceState.swift; sourceTree = "<group>"; };
+		AA0000000000000000000204 /* Views/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000205 /* Views/DevicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/DevicePage.swift; sourceTree = "<group>"; };
+		AA0000000000000000000206 /* Views/BioPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/BioPage.swift; sourceTree = "<group>"; };
+		AA0000000000000000000207 /* Views/ImuPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ImuPage.swift; sourceTree = "<group>"; };
+		AA0000000000000000000208 /* Views/WaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WaveformView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000209 /* Views/CubeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/CubeView.swift; sourceTree = "<group>"; };
+		AA000000000000000000020D /* sensor.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = sensor.xcframework; path = ../lib/sensor.xcframework; sourceTree = "<group>"; };
+		AA000000000000000000020E /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
+		AA000000000000000000020F /* BridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BridgingHeader.h; sourceTree = "<group>"; };
+		AA0000000000000000000210 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA0000000000000000000211 /* SensorDemoSwift.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SensorDemoSwift.entitlements; sourceTree = "<group>"; };
+		AA0000000000000000000213 /* SensorDemoSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SensorDemoSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000214 /* Model/LiveFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/LiveFilter.swift; sourceTree = "<group>"; };
+		AA0000000000000000000215 /* Model/SpectrumCompute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/SpectrumCompute.swift; sourceTree = "<group>"; };
+		AA0000000000000000000216 /* Views/SpectrumView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SpectrumView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000301 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000000000000000000010E /* CoreBluetooth.framework in Frameworks */,
+				AA000000000000000000010D /* sensor.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000401 = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000402 /* SensorDemoSwift */,
+				AA0000000000000000000404 /* Frameworks */,
+				AA0000000000000000000405 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000402 /* SensorDemoSwift */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000201 /* SensorDemoSwiftApp.swift */,
+				AA0000000000000000000202 /* Model/AppModel.swift */,
+				AA0000000000000000000203 /* Model/DeviceState.swift */,
+				AA0000000000000000000204 /* Views/ContentView.swift */,
+				AA0000000000000000000205 /* Views/DevicePage.swift */,
+				AA0000000000000000000206 /* Views/BioPage.swift */,
+				AA0000000000000000000207 /* Views/ImuPage.swift */,
+				AA0000000000000000000208 /* Views/WaveformView.swift */,
+				AA0000000000000000000209 /* Views/CubeView.swift */,
+				AA0000000000000000000214 /* Model/LiveFilter.swift */,
+				AA0000000000000000000215 /* Model/SpectrumCompute.swift */,
+				AA0000000000000000000216 /* Views/SpectrumView.swift */,
+				AA000000000000000000020F /* BridgingHeader.h */,
+				AA0000000000000000000210 /* Info.plist */,
+				AA0000000000000000000211 /* SensorDemoSwift.entitlements */,
+			);
+			path = SensorDemoSwift;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000404 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000020D /* sensor.xcframework */,
+				AA000000000000000000020E /* CoreBluetooth.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000405 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000213 /* SensorDemoSwift.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000000000000000000501 /* SensorDemoSwift */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000601 /* Build configuration list for PBXNativeTarget "SensorDemoSwift" */;
+			buildPhases = (
+				AA0000000000000000000302 /* Sources */,
+				AA0000000000000000000301 /* Frameworks */,
+				AA0000000000000000000303 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SensorDemoSwift;
+			productName = SensorDemoSwift;
+			productReference = AA0000000000000000000213 /* SensorDemoSwift.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000502 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = AA0000000000000000000602 /* Build configuration list for PBXProject "SensorDemoSwift" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000401;
+			productRefGroup = AA0000000000000000000405 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000000000000000000501 /* SensorDemoSwift */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000303 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000302 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0000000000000000000101 /* SensorDemoSwiftApp.swift in Sources */,
+				AA0000000000000000000102 /* Model/AppModel.swift in Sources */,
+				AA0000000000000000000103 /* Model/DeviceState.swift in Sources */,
+				AA0000000000000000000104 /* Views/ContentView.swift in Sources */,
+				AA0000000000000000000105 /* Views/DevicePage.swift in Sources */,
+				AA0000000000000000000106 /* Views/BioPage.swift in Sources */,
+				AA0000000000000000000107 /* Views/ImuPage.swift in Sources */,
+				AA0000000000000000000108 /* Views/WaveformView.swift in Sources */,
+				AA0000000000000000000109 /* Views/CubeView.swift in Sources */,
+				AA0000000000000000000114 /* Model/LiveFilter.swift in Sources */,
+				AA0000000000000000000115 /* Model/SpectrumCompute.swift in Sources */,
+				AA0000000000000000000116 /* Views/SpectrumView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA0000000000000000000703 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"ARCHS[sdk=macosx*]" = arm64;
+				CODE_SIGN_ENTITLEMENTS = "";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = SensorDemoSwift/SensorDemoSwift.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VT7SC62W2Y;
+				ENABLE_HARDENED_RUNTIME = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oymotion.SensorDemoSwift;
+				PRODUCT_BUNDLE_PACKAGE_TYPE = APPL;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_OBJC_BRIDGING_HEADER = SensorDemoSwift/BridgingHeader.h;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000704 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"ARCHS[sdk=macosx*]" = arm64;
+				CODE_SIGN_ENTITLEMENTS = "";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = SensorDemoSwift/SensorDemoSwift.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VT7SC62W2Y;
+				ENABLE_HARDENED_RUNTIME = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oymotion.SensorDemoSwift;
+				PRODUCT_BUNDLE_PACKAGE_TYPE = APPL;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_OBJC_BRIDGING_HEADER = SensorDemoSwift/BridgingHeader.h;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000601 /* Build configuration list for PBXNativeTarget "SensorDemoSwift" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000703 /* Debug */,
+				AA0000000000000000000704 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000602 /* Build configuration list for PBXProject "SensorDemoSwift" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000701 /* Debug */,
+				AA0000000000000000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AA0000000000000000000502 /* Project object */;
+}
