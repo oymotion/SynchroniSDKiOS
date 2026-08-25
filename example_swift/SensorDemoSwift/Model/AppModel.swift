@@ -85,9 +85,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var gestureText = AppModel.gestureEmptyText
     @Published private(set) var bioMode: BioMode = .none
     @Published private(set) var replayText = ""
-    /// Replay session state.
-    @Published private(set) var replayMac: String?
-    @Published private(set) var replayName = ""
+    /// Replay session state: member macs in start order and their names.
+    @Published private(set) var replayMacs: [String] = []
+    @Published private(set) var replayNames: [String: String] = [:]
     @Published private(set) var replayPaused = false
     @Published private(set) var replayStopRequested = false
     /// Re-entry guard for the parse-to-CSV worker.
@@ -97,10 +97,10 @@ final class AppModel: NSObject, ObservableObject {
     /// Current EEG page of the current device's Bio panel.
     @Published private(set) var bioPageIndex = 0
 
-    var replaying: Bool { replayMac != nil }
+    var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.8"
+    static let demoVersion = "0.1.14"
     /// SDK version string, captured at startup.
     let sdkVersion: String
 
@@ -135,7 +135,7 @@ final class AppModel: NSObject, ObservableObject {
             let all = contexts.values
             contextsLock.unlock()
             for ctx in all { ctx.profile.setAutoReconnect(autoReconnect) }
-            replayProfile?.setAutoReconnect(autoReconnect)
+            for (_, p) in replayProfiles { p.setAutoReconnect(autoReconnect) }
         }
     }
     @Published var cloneData = false {
@@ -209,13 +209,16 @@ final class AppModel: NSObject, ObservableObject {
     private var contexts: [String: DeviceContext] = [:]
     /// Insertion order of contexts.
     private var contextOrder: [String] = []
-    private var replayProfile: SensorProfile?
-    /// True once the replay stream was observed on.
-    private var replayStreamingSeen = false
+    /// Active replay members keyed by mac.
+    private var replayProfiles: [String: SensorProfile] = [:]
     /// User-initiated disconnects.
     private var pendingUserDisconnect: Set<String> = []
     /// MACs in an abnormal drop being auto-reconnected.
     private var autoReconnectingMacs: Set<String> = []
+    /// Successful user setParam history per device (auto-reconnect restore).
+    private var savedParamsByMac: [String: [(key: String, value: String)]] = [:]
+    /// Devices whose next stream start replays the saved params.
+    private var pendingParamRestore: Set<String> = []
     /// Per-MAC caches of the resolved device log/bin-data paths.
     private var lastLogPaths: [String: String] = [:]
     private var lastDataPaths: [String: String] = [:]
@@ -367,8 +370,9 @@ final class AppModel: NSObject, ObservableObject {
         contexts.removeAll()
         contextOrder.removeAll()
         contextsLock.unlock()
-        replayProfile = nil
-        replayMac = nil
+        replayProfiles.removeAll()
+        replayMacs.removeAll()
+        replayNames.removeAll()
         devices.removeAll()
         syncMirrors()
         dataQueueLock.lock()
@@ -425,7 +429,6 @@ final class AppModel: NSObject, ObservableObject {
             statusText = state.buildStatusText(head: head)
         }
         rateText = state.buildRateText()
-        pollReplayEnd()
     }
 
     // MARK: data pipeline
@@ -509,7 +512,7 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    private func connect(mac: String) {
+    private func connect(mac: String, restoreParams: Bool = false) {
         controller.stopScan()
         scanning = false
 
@@ -518,16 +521,31 @@ final class AppModel: NSObject, ObservableObject {
         let p = controller.requireSensor(mac)
         p.delegate = self
         p.setAutoReconnect(autoReconnect)
-        let ctx = DeviceContext(profile: p)
-        ctx.state.liveFilter.setBand(liveFilterBand)
-        contextsLock.lock()
-        contexts[mac] = ctx
-        if !contextOrder.contains(mac) { contextOrder.append(mac) }
-        contextsLock.unlock()
+        let ctx: DeviceContext
+        if let kept = context(for: mac), !kept.isReplay, kept.profile === p {
+            ctx = kept
+            ctx.flowStarted = false
+        } else {
+            ctx = DeviceContext(profile: p)
+            ctx.state.liveFilter.setBand(liveFilterBand)
+            contextsLock.lock()
+            contexts[mac] = ctx
+            if !contextOrder.contains(mac) { contextOrder.append(mac) }
+            contextsLock.unlock()
+        }
+        if restoreParams {
+            pendingParamRestore.insert(mac)
+        } else {
+            pendingParamRestore.remove(mac)
+        }
         statusText = "Connecting to \(mac)..."
         syncMirrors()
         if ctx === currentContext {
             connectionText = "Connecting..."
+        }
+        if p.isReady {
+            startReadyFlow(p)
+            return
         }
         p.connect { [weak self] ok, err in
             self?.onMain {
@@ -616,7 +634,12 @@ final class AppModel: NSObject, ObservableObject {
             appLog("App: device connected and streaming: \(p.device.name) (\(p.device.mac))",
                    profile: p)
             statusText = "Streaming (\(p.device.name))"
-            applySessionParams(ctx)
+            applySessionParams(ctx) { [weak self] in
+                guard let self = self else { return }
+                guard self.pendingParamRestore.remove(p.device.mac) != nil else { return }
+                ctx.state.clearBuffers()
+                self.restoreSavedParams(p, for: ctx)
+            }
         } else {
             appLog("App: failed to start data stream on \(p.device.mac)",
                    level: "E", profile: p)
@@ -637,6 +660,91 @@ final class AppModel: NSObject, ObservableObject {
         }
         statusText = "Disconnecting..."
         ctx.profile.disconnect(nil)
+    }
+
+    // MARK: multi start / stop
+
+    /// Connected, initialized device contexts in insertion order.
+    private func readyContexts() -> [DeviceContext] {
+        contextsLock.lock()
+        defer { contextsLock.unlock() }
+        return contextOrder.compactMap { contexts[$0] }.filter {
+            $0.connected && !$0.isReplay && $0.profile.hasInited
+        }
+    }
+
+    func multiStart() {
+        let targets = readyContexts()
+        guard !targets.isEmpty else {
+            appLog("User: multi start rejected (no ready device)", level: "W")
+            statusText = "No ready device for multi start"
+            return
+        }
+        appLog("User: multi start (\(targets.count) device(s))")
+        let streaming = targets.filter { $0.profile.isDataTransfering }.map { $0.profile }
+        guard !streaming.isEmpty else {
+            startMulti(targets)
+            return
+        }
+        controller.multiStopDataNotification(streaming, timeoutMs: 10000) { [weak self] results, _ in
+            let failed = results.filter { !$0.value.boolValue }.map { $0.key }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                guard failed.isEmpty else {
+                    let macs = failed.joined(separator: ", ")
+                    self.appLog("App: multi start aborted, stop failed on: \(macs)", level: "W")
+                    self.statusText = "Multi start aborted: stop failed on \(macs)"
+                    return
+                }
+                self.startMulti(targets)
+            }
+        }
+    }
+
+    private func startMulti(_ targets: [DeviceContext]) {
+        let sameModel = Set(targets.map { $0.info?.modelName ?? "" }).count == 1
+        statusText = "Multi starting ..."
+        controller.multiStartDataNotification(targets.map { $0.profile },
+                                              timeoutMs: sameModel ? 30000 : 60000,
+                                              maxDelayDispersionMs: sameModel ? 5 : -1,
+                                              maxAttempts: sameModel ? 3 : 5) { [weak self] results, errors in
+            DispatchQueue.main.async {
+                self?.reportMulti("start", total: targets.count,
+                                  results: results, errors: errors)
+            }
+        }
+    }
+
+    func multiStop() {
+        let targets = readyContexts().filter { $0.streaming }
+        guard !targets.isEmpty else {
+            appLog("User: multi stop rejected (no streaming device)", level: "W")
+            statusText = "No streaming device for multi stop"
+            return
+        }
+        appLog("User: multi stop (\(targets.count) device(s))")
+        statusText = "Multi stopping ..."
+        controller.multiStopDataNotification(targets.map { $0.profile },
+                                             timeoutMs: 10000) { [weak self] results, errors in
+            DispatchQueue.main.async {
+                self?.reportMulti("stop", total: targets.count,
+                                  results: results, errors: errors)
+            }
+        }
+    }
+
+    /// Per-device multi-op result line.
+    private func reportMulti(_ action: String, total: Int,
+                             results: [String: NSNumber]?, errors: [String: String]?) {
+        let failed = (results ?? [:]).filter { !$0.value.boolValue }.map { $0.key }
+        for mac in failed {
+            appLog("App: multi \(action) failed on \(mac): \(errors?[mac] ?? "")", level: "W")
+        }
+        if failed.isEmpty {
+            statusText = "Multi \(action): \(total) device(s) \(action == "start" ? "started" : "stopped")"
+        } else {
+            statusText = "Multi \(action) failed on: \(failed.joined(separator: ", "))"
+        }
     }
 
     // MARK: link / MTU info
@@ -687,6 +795,7 @@ final class AppModel: NSObject, ObservableObject {
             self?.onMain {
                 guard let self = self else { return }
                 self.appLog("User: setParam(EEG_SAMPLE_RATE, \(rate)) -> \(result)", profile: p)
+                self.recordSavedParam(ctx.mac, key: "EEG_SAMPLE_RATE", value: "\(rate)", result: result)
                 if err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:") {
                     self.statusText = "EEG_SAMPLE_RATE failed: \(err?.localizedDescription ?? result)"
                 } else {
@@ -707,6 +816,7 @@ final class AppModel: NSObject, ObservableObject {
             self?.onMain {
                 guard let self = self else { return }
                 self.appLog("User: setParam(\(key), \(value)) -> \(result)", profile: p)
+                self.recordSavedParam(ctx.mac, key: key, value: value, result: result)
                 let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
                 if failed {
                     self.statusText = "\(key) failed: \(err?.localizedDescription ?? result)"
@@ -724,6 +834,45 @@ final class AppModel: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    /// Records a successful setParam for the auto-reconnect restore.
+    private func recordSavedParam(_ mac: String, key: String, value: String, result: String) {
+        if result.hasPrefix("Error") { return }
+        var list = savedParamsByMac[mac] ?? []
+        if let idx = list.firstIndex(where: { $0.key == key }) {
+            list[idx].value = value
+        } else {
+            list.append((key, value))
+        }
+        savedParamsByMac[mac] = list
+    }
+
+    /// Replays the recorded setParam history, then re-syncs the controls.
+    private func restoreSavedParams(_ p: SensorProfile, for ctx: DeviceContext) {
+        let params = savedParamsByMac[p.device.mac] ?? []
+        var step: ((Int) -> Void)?
+        step = { [weak self] index in
+            guard let self = self else { return }
+            guard index < params.count else {
+                step = nil
+                p.getParam(5, key: "NTF") { [weak self] result, _ in
+                    self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
+                }
+                p.getParam(5, key: "FILTER") { [weak self] result, _ in
+                    self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
+                }
+                self.refreshEegSampleRateState(p, for: ctx)
+                return
+            }
+            let param = params[index]
+            p.setParam(5, key: param.key, value: param.value) { [weak self] result, _ in
+                self?.appLog("App: restore setParam(\(param.key), \(param.value)) -> \(result)",
+                             profile: p)
+                self?.onMain { step?(index + 1) }
+            }
+        }
+        step?(0)
     }
 
     private func applyParamReadback(_ result: String, keys: [String], for ctx: DeviceContext) {
@@ -825,18 +974,26 @@ final class AppModel: NSObject, ObservableObject {
 
     /// Per-device session params: the profile log redirect and the bin-data
     /// recording.
-    private func applySessionParams(_ ctx: DeviceContext) {
+    private func applySessionParams(_ ctx: DeviceContext, completion: (() -> Void)? = nil) {
         if debugLogEnabled {
-            applyDebugLogPath(for: ctx)
-        }
-        if debugBinEnabled {
-            applyDebugBin(for: ctx)
+            applyDebugLogPath(for: ctx) { [weak self] in
+                guard let self = self else { return }
+                if self.debugBinEnabled {
+                    self.applyDebugBin(for: ctx, completion: completion)
+                } else {
+                    completion?()
+                }
+            }
+        } else if debugBinEnabled {
+            applyDebugBin(for: ctx, completion: completion)
+        } else {
+            completion?()
         }
     }
 
-    private func applyDebugLogPath(for ctx: DeviceContext) {
+    private func applyDebugLogPath(for ctx: DeviceContext, completion: (() -> Void)? = nil) {
         let p = ctx.profile
-        guard ctx.connected, p.hasInited else { return }
+        guard ctx.connected, p.hasInited else { completion?(); return }
         let mac = ctx.mac
         let path = lastLogPaths[mac] ?? "True"
         p.setParam(5, key: "DEBUG_LOG_PATH", value: path) { [weak self] result, err in
@@ -844,21 +1001,23 @@ final class AppModel: NSObject, ObservableObject {
                 guard let self = self else { return }
                 self.appLog("App: setParam(DEBUG_LOG_PATH, \(path)) -> \(result)", profile: p)
                 let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
-                guard !failed else { return }
-                p.getParam(5, key: "DEBUG_LOG_PATH") { [weak self] result, _ in
-                    self?.onMain {
-                        if !result.isEmpty && !result.hasPrefix("Error") {
-                            self?.lastLogPaths[mac] = result
+                if !failed {
+                    p.getParam(5, key: "DEBUG_LOG_PATH") { [weak self] result, _ in
+                        self?.onMain {
+                            if !result.isEmpty && !result.hasPrefix("Error") {
+                                self?.lastLogPaths[mac] = result
+                            }
                         }
                     }
                 }
+                completion?()
             }
         }
     }
 
-    private func applyDebugBin(for ctx: DeviceContext) {
+    private func applyDebugBin(for ctx: DeviceContext, completion: (() -> Void)? = nil) {
         let p = ctx.profile
-        guard ctx.connected, p.hasInited else { return }
+        guard ctx.connected, p.hasInited else { completion?(); return }
         let mac = ctx.mac
         let path = lastDataPaths[mac] ?? "True"
         p.setParam(5, key: "DEBUG_BLE_DATA_PATH", value: path) { [weak self] result, err in
@@ -866,14 +1025,16 @@ final class AppModel: NSObject, ObservableObject {
                 guard let self = self else { return }
                 self.appLog("App: setParam(DEBUG_BLE_DATA_PATH, \(path)) -> \(result)", profile: p)
                 let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
-                guard !failed else { return }
-                p.getParam(5, key: "DEBUG_BLE_DATA_PATH") { [weak self] result, _ in
-                    self?.onMain {
-                        if !result.isEmpty && !result.hasPrefix("Error") {
-                            self?.lastDataPaths[mac] = result
+                if !failed {
+                    p.getParam(5, key: "DEBUG_BLE_DATA_PATH") { [weak self] result, _ in
+                        self?.onMain {
+                            if !result.isEmpty && !result.hasPrefix("Error") {
+                                self?.lastDataPaths[mac] = result
+                            }
                         }
                     }
                 }
+                completion?()
             }
         }
     }
@@ -907,45 +1068,34 @@ final class AppModel: NSObject, ObservableObject {
 
     // MARK: bin replay / parse
 
-    /// Starts a bin replay session.
-    func replayBin(url: URL) {
+    /// Replay entry guard: no live devices, no active replay.
+    private func canStartReplay() -> Bool {
         contextsLock.lock()
         let busy = !contexts.isEmpty
         contextsLock.unlock()
         guard !busy else {
             appLog("User: replay rejected (devices still connected)", level: "W")
             statusText = "Please disconnect all devices before replaying a bin file"
-            return
+            return false
         }
-        guard replayMac == nil else { return }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        let path = url.path
-        appLog("User: replay bin file: \(path)")
-        guard let info = controller.getBinFileInfo(path), info.valid, !info.mac.isEmpty else {
-            appLog("App: invalid bin file (no config record): \(path)", level: "W")
-            statusText = "Invalid bin file: no config record found"
-            replayText = statusText
-            return
-        }
+        return replayMacs.isEmpty
+    }
+
+    private func stopScanForReplay() {
         if controller.isScanning {
             appLog("Stop scan")
             controller.stopScan()
             scanning = false
         }
+    }
+
+    /// Registers one started replay member.
+    private func addReplayMember(_ p: SensorProfile, info: BinFileInfo) {
         let mac = info.mac
-        guard let p = controller.replayBinFile(path, deviceMac: mac, realtime: true, timeout: 5) else {
-            statusText = "Replay failed to start"
-            replayText = statusText
-            return
-        }
         p.delegate = self
-        replayProfile = p
-        replayMac = mac
-        replayName = info.deviceName
-        replayStreamingSeen = false
-        replayStopRequested = false
-        replayPaused = false
+        replayProfiles[mac] = p
+        replayMacs.append(mac)
+        replayNames[mac] = info.deviceName
         let ctx = DeviceContext(profile: p)
         ctx.isReplay = true
         ctx.flowStarted = true
@@ -957,6 +1107,31 @@ final class AppModel: NSObject, ObservableObject {
         contexts[mac] = ctx
         if !contextOrder.contains(mac) { contextOrder.append(mac) }
         contextsLock.unlock()
+    }
+
+    /// Starts a bin replay session.
+    func replayBin(url: URL) {
+        guard canStartReplay() else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let path = url.path
+        appLog("User: replay bin file: \(path)")
+        guard let info = controller.getBinFileInfo(path), info.valid, !info.mac.isEmpty else {
+            appLog("App: invalid bin file (no config record): \(path)", level: "W")
+            statusText = "Invalid bin file: no config record found"
+            replayText = statusText
+            return
+        }
+        stopScanForReplay()
+        let mac = info.mac
+        guard let p = controller.replayBinFile(path, deviceMac: mac, realtime: true, timeout: 5) else {
+            statusText = "Replay failed to start"
+            replayText = statusText
+            return
+        }
+        replayStopRequested = false
+        replayPaused = false
+        addReplayMember(p, info: info)
         selectedMac = mac
         syncMirrors()
         let text = "Replaying: \(url.lastPathComponent) (duration " +
@@ -965,31 +1140,95 @@ final class AppModel: NSObject, ObservableObject {
         replayText = text
     }
 
-    /// Drops the replay context; idempotent.
-    private func removeReplayContext() {
-        guard let mac = replayMac else { return }
+    /// Starts a synchronized group replay of several bin files.
+    func replayBinGroup(urls: [URL]) {
+        guard urls.count >= 2 else {
+            appLog("User: multi replay rejected (needs at least 2 bin files)", level: "W")
+            statusText = "Multi replay needs at least 2 bin files"
+            return
+        }
+        guard canStartReplay() else { return }
+        var scoped: [URL] = []
+        for url in urls where url.startAccessingSecurityScopedResource() {
+            scoped.append(url)
+        }
+        defer { for url in scoped { url.stopAccessingSecurityScopedResource() } }
+        var paths: [String] = []
+        var macs: [String] = []
+        var infos: [String: BinFileInfo] = [:]
+        var names: [String: String] = [:]
+        for url in urls {
+            let path = url.path
+            appLog("User: replay bin file: \(path)")
+            guard let info = controller.getBinFileInfo(path), info.valid, !info.mac.isEmpty else {
+                appLog("App: invalid bin file (no config record): \(path)", level: "W")
+                continue
+            }
+            guard !macs.contains(info.mac) else {
+                appLog("App: duplicate replay mac skipped: \(info.mac) (\(path))", level: "W")
+                continue
+            }
+            paths.append(path)
+            macs.append(info.mac)
+            infos[info.mac] = info
+            names[info.mac] = url.lastPathComponent
+        }
+        guard !paths.isEmpty else {
+            statusText = "Invalid bin file: no config record found"
+            replayText = statusText
+            return
+        }
+        stopScanForReplay()
+        let results = controller.multiReplayBinFile(paths, deviceMacs: macs,
+                                                    realtime: true, timeout: 5)
+        replayStopRequested = false
+        replayPaused = false
+        var started: [String] = []
+        for i in paths.indices {
+            guard i < results.count, let p = results[i] as? SensorProfile,
+                  let info = infos[macs[i]] else {
+                appLog("App: replay member failed to start: \(paths[i])", level: "W")
+                continue
+            }
+            addReplayMember(p, info: info)
+            started.append(names[macs[i]] ?? paths[i])
+        }
+        guard !replayMacs.isEmpty else {
+            statusText = "Replay failed to start"
+            replayText = statusText
+            return
+        }
+        selectedMac = replayMacs.first
+        syncMirrors()
+        let text = "Replaying: \(started.joined(separator: " + ")) (realtime) ..."
+        statusText = text
+        replayText = text
+    }
+
+    /// Drops one replay member's context; idempotent.
+    private func removeReplayContext(mac: String) {
         contextsLock.lock()
         contexts.removeValue(forKey: mac)
         contextOrder.removeAll { $0 == mac }
         contextsLock.unlock()
-        replayProfile = nil
-        replayMac = nil
-        replayName = ""
+        replayProfiles.removeValue(forKey: mac)
+        replayMacs.removeAll { $0 == mac }
+        replayNames.removeValue(forKey: mac)
         if selectedMac == mac {
-            selectedMac = nil
+            selectedMac = replayMacs.first
         }
         syncMirrors()
     }
 
     /// Single pause/resume toggle.
     func toggleReplayPause() {
-        guard let mac = replayMac else { return }
+        guard let mac = replayMacs.first else { return }
         let action = replayPaused ? "resume" : "pause"
         let result = replayPaused
             ? controller.resumeBinReplay(mac)
             : controller.pauseBinReplay(mac)
         appLog("User: \(action) replay -> \(result)", level: result == "OK" ? "I" : "W",
-               profile: replayProfile)
+               profile: replayProfiles[mac])
         guard result == "OK" else {
             statusText = "Replay pause/resume failed: \(result)"
             return
@@ -999,42 +1238,39 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func stopReplay() {
-        guard let mac = replayMac else { return }
+        let macs = replayMacs
+        guard !macs.isEmpty else { return }
         replayStopRequested = true
         DispatchQueue.global().async { [weak self] in
-            let result = self?.controller.stopBinReplay(mac) ?? ""
+            var failed = ""
+            for mac in macs {
+                let result = self?.controller.stopBinReplay(mac) ?? ""
+                if result != "OK" { failed = result }
+                self?.onMain {
+                    guard let self = self else { return }
+                    self.appLog("User: stop replay -> \(result)",
+                                level: result == "OK" ? "I" : "W",
+                                profile: self.replayProfiles[mac])
+                }
+            }
             self?.onMain {
                 guard let self = self else { return }
-                self.appLog("User: stop replay -> \(result)",
-                            level: result == "OK" ? "I" : "W", profile: self.replayProfile)
-                guard result == "OK" else {
-                    self.statusText = "Stop replay failed: \(result)"
+                if !failed.isEmpty {
+                    self.statusText = "Stop replay failed: \(failed)"
                     self.replayStopRequested = false
-                    return
+                } else {
+                    self.statusText = "Stopping replay ..."
                 }
-                self.statusText = "Stopping replay ..."
             }
         }
     }
 
-    /// Polls for the replay end.
-    private func pollReplayEnd() {
-        guard let mac = replayMac, let ctx = context(for: mac) else { return }
-        if ctx.profile.isDataTransfering {
-            replayStreamingSeen = true
-            return
-        }
-        if replayStreamingSeen || replayStopRequested {
-            finishReplay(replayStopRequested ? "Replay stopped" : "Replay finished")
-        }
-    }
-
-    /// Replay teardown; idempotent.
-    private func finishReplay(_ message: String) {
-        guard replayMac != nil else { return }
-        appLog("App: replay done: \(message)", profile: replayProfile)
-        removeReplayContext()
-        replayStreamingSeen = false
+    /// Replay teardown of one member; idempotent.
+    private func finishReplay(_ message: String, mac: String) {
+        guard let p = replayProfiles[mac] else { return }
+        appLog("App: replay done: \(message)", profile: p)
+        removeReplayContext(mac: mac)
+        guard replayMacs.isEmpty else { return }
         replayStopRequested = false
         replayPaused = false
         statusText = message
@@ -1110,9 +1346,9 @@ extension AppModel: SensorProfileDelegate {
 
     func onStateChanged(_ profile: SensorProfile, newState: BLEState) {
         onMain {
-            if let replay = self.replayProfile, profile === replay {
+            if self.replayProfiles[profile.device.mac] != nil {
                 if newState == .disconnected {
-                    self.finishReplay("Replay finished")
+                    self.finishReplay("Replay finished", mac: profile.device.mac)
                 }
                 return
             }
@@ -1170,10 +1406,20 @@ extension AppModel: SensorProfileDelegate {
         syncMirrors()
     }
 
-    /// SDK auto-reconnect query; log-only here.
-    func onAutoReconnect(_ profile: SensorProfile, hasLastSession: Bool) -> Bool {
+    /// SDK auto-reconnect query: the app drives the normal connect flow itself.
+    func onAutoReconnect(_ profile: SensorProfile, hasLastSession: Bool, answer: (Bool) -> Void) {
         profile.log("App: auto reconnect callback received, restore=\(hasLastSession)")
-        return false
+        let mac = profile.device.mac
+        onMain { self.pressConnectForAutoReconnect(mac, restore: hasLastSession) }
+        answer(true)
+    }
+
+    /// Auto-reconnect: selects the row and drives the normal connect flow.
+    private func pressConnectForAutoReconnect(_ mac: String, restore: Bool) {
+        if devices.contains(where: { $0.mac == mac }) {
+            selectedMac = mac
+        }
+        connect(mac: mac, restoreParams: restore)
     }
 
     func onError(_ profile: SensorProfile, err: Error) {
@@ -1201,11 +1447,12 @@ extension AppModel: SensorProfileDelegate {
             guard let ctx = self.context(for: profile.device.mac) else { return }
             ctx.streaming = isTransferring
             self.syncMirrors()
-            guard profile.device.mac == self.replayMac else { return }
-            if isTransferring {
-                self.replayStreamingSeen = true
-            } else if self.replayStreamingSeen || self.replayStopRequested {
-                self.finishReplay(self.replayStopRequested ? "Replay stopped" : "Replay finished")
+            let mac = profile.device.mac
+            guard self.replayProfiles[mac] != nil else { return }
+            if !isTransferring {
+                // Replay EOF (or a user stop): finish the member here.
+                self.finishReplay(self.replayStopRequested ? "Replay stopped" : "Replay finished",
+                                  mac: mac)
             }
         }
     }

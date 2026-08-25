@@ -16,12 +16,28 @@
 		AA0000000000000000000107 /* Views/ImuPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000207 /* Views/ImuPage.swift */; };
 		AA0000000000000000000108 /* Views/WaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000208 /* Views/WaveformView.swift */; };
 		AA0000000000000000000109 /* Views/CubeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000209 /* Views/CubeView.swift */; };
-		AA000000000000000000010D /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020D /* sensor.xcframework */; };
+		AA000000000000000000010D /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020D /* sensor.xcframework */; platformFilters = (ios, ); };
 		AA000000000000000000010E /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020E /* CoreBluetooth.framework */; };
+		AA0000000000000000000117 /* libsensor.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); };
+		AA0000000000000000000118 /* libsensor.dylib in Embed dylib */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); };
 		AA0000000000000000000114 /* Model/LiveFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000214 /* Model/LiveFilter.swift */; };
 		AA0000000000000000000115 /* Model/SpectrumCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000215 /* Model/SpectrumCompute.swift */; };
 		AA0000000000000000000116 /* Views/SpectrumView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000216 /* Views/SpectrumView.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA0000000000000000000304 /* Embed dylib */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				AA0000000000000000000118 /* libsensor.dylib in Embed dylib */,
+			);
+			name = "Embed dylib";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000201 /* SensorDemoSwiftApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorDemoSwiftApp.swift; sourceTree = "<group>"; };
@@ -42,6 +58,7 @@
 		AA0000000000000000000214 /* Model/LiveFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/LiveFilter.swift; sourceTree = "<group>"; };
 		AA0000000000000000000215 /* Model/SpectrumCompute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Model/SpectrumCompute.swift; sourceTree = "<group>"; };
 		AA0000000000000000000216 /* Views/SpectrumView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SpectrumView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000217 /* libsensor.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libsensor.dylib; path = ../lib/macos/libsensor.dylib; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +68,7 @@
 			files = (
 				AA000000000000000000010E /* CoreBluetooth.framework in Frameworks */,
 				AA000000000000000000010D /* sensor.xcframework in Frameworks */,
+				AA0000000000000000000117 /* libsensor.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -92,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000000000000000000020D /* sensor.xcframework */,
+				AA0000000000000000000217 /* libsensor.dylib */,
 				AA000000000000000000020E /* CoreBluetooth.framework */,
 			);
 			name = Frameworks;
@@ -114,6 +133,7 @@
 			buildPhases = (
 				AA0000000000000000000302 /* Sources */,
 				AA0000000000000000000301 /* Frameworks */,
+				AA0000000000000000000304 /* Embed dylib */,
 				AA0000000000000000000303 /* Resources */,
 			);
 			buildRules = (
@@ -239,6 +259,11 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				"HEADER_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(SRCROOT)/../lib/macos/include",
+					"$(SRCROOT)/../lib/macos/include/sensorobjc",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -271,6 +296,11 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
+				"HEADER_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(SRCROOT)/../lib/macos/include",
+					"$(SRCROOT)/../lib/macos/include/sensorobjc",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";

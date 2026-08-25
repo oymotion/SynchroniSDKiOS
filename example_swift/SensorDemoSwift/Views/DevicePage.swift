@@ -6,6 +6,7 @@ struct DevicePage: View {
     @EnvironmentObject var model: AppModel
     @State private var showBinPicker = false
     @State private var parseInsteadOfReplay = false
+    @State private var multiReplayPicker = false
 
     var body: some View {
         Form {
@@ -17,7 +18,12 @@ struct DevicePage: View {
                     .disabled(model.replaying)
                     Spacer()
                 }
-                if model.devices.isEmpty && model.replayMac == nil {
+                HStack {
+                    Button("Multi Start") { model.multiStart() }
+                        .disabled(model.connectedMacs.isEmpty || model.replaying)
+                    Spacer()
+                }
+                if model.devices.isEmpty && !model.replaying {
                     Text("No devices yet")
                         .foregroundStyle(.secondary)
                 } else {
@@ -56,11 +62,11 @@ struct DevicePage: View {
                             ? Color.accentColor.opacity(0.15) : nil)
                     }
                     .disabled(model.replaying)
-                    // Replay session row.
-                    if let rmac = model.replayMac {
+                    // Replay session rows.
+                    ForEach(model.replayMacs, id: \.self) { rmac in
                         HStack {
                             Text((model.streamingMacs.contains(rmac) ? "[Streaming] " : "") +
-                                 "[Replay] \(model.replayName)")
+                                 "[Replay] \(model.replayNames[rmac] ?? "")")
                                 .foregroundStyle(model.currentMac == rmac
                                     ? Color.accentColor : Color.primary)
                             Spacer()
@@ -149,11 +155,19 @@ struct DevicePage: View {
                 HStack {
                     Button("Replay Bin...") {
                         parseInsteadOfReplay = false
+                        multiReplayPicker = false
+                        showBinPicker = true
+                    }
+                    .disabled(model.replaying)
+                    Button("Multi Replay Bin...") {
+                        parseInsteadOfReplay = false
+                        multiReplayPicker = true
                         showBinPicker = true
                     }
                     .disabled(model.replaying)
                     Button("Parse to CSV...") {
                         parseInsteadOfReplay = true
+                        multiReplayPicker = false
                         showBinPicker = true
                     }
                     .disabled(model.analyzing)
@@ -170,11 +184,16 @@ struct DevicePage: View {
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $showBinPicker,
-                      allowedContentTypes: [.sensorBin]) { result in
-            guard case .success(let url) = result else { return }
+                      allowedContentTypes: [.sensorBin],
+                      allowsMultipleSelection: multiReplayPicker) { result in
+            guard case .success(let urls) = result else { return }
             if parseInsteadOfReplay {
-                model.parseBinToCsv(url: url)
-            } else {
+                if let url = urls.first {
+                    model.parseBinToCsv(url: url)
+                }
+            } else if multiReplayPicker {
+                model.replayBinGroup(urls: urls)
+            } else if let url = urls.first {
                 model.replayBin(url: url)
             }
         }
