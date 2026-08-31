@@ -100,7 +100,7 @@ final class AppModel: NSObject, ObservableObject {
     var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.14"
+    static let demoVersion = "0.1.18"
     /// SDK version string, captured at startup.
     let sdkVersion: String
 

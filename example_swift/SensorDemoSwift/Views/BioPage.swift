@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Bio page: 8 fixed single-channel waveform slots.
+/// Bio page: 8 fixed slots; EMG/EEG channel rows, the EEG mode's ECG row
+/// and the PPG mode's EEG/PPG rows split into a left FFT spectrum half and
+/// a right time-domain waveform half.
 struct BioPage: View {
     @EnvironmentObject var model: AppModel
 
@@ -87,10 +89,18 @@ struct BioPage: View {
         let channels = max(reported, observed)
         ForEach(0..<(channels > 0 ? min(channels, 8) : 8), id: \.self) { ch in
             let (text, color) = impedanceSide(imp, ch)
-            WaveformView(title: "EMG ch\(ch)", ring: model.deviceState.emg,
-                         channel: ch, sideText: text, sideColor: color,
-                         placeholder: waitingText)
-                .frame(minHeight: 90)
+            // Left: channel FFT spectrum. Right: time-domain waveform.
+            HStack(spacing: 8) {
+                SpectrumView(title: "", ring: model.deviceState.emg,
+                             state: model.deviceState, labels: ["ch\(ch)"],
+                             channel: ch, colorIndex: ch, fillHeight: true)
+                    .frame(maxWidth: .infinity)
+                WaveformView(title: "EMG ch\(ch)", ring: model.deviceState.emg,
+                             channel: ch, sideText: text, sideColor: color,
+                             placeholder: waitingText)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(minHeight: 90)
         }
     }
 
@@ -114,14 +124,30 @@ struct BioPage: View {
             let ch = startCh + i
             if i < perPage && ch < total {
                 let (text, color) = impedanceSide(imp, ch)
-                WaveformView(title: "EEG ch\(ch)", ring: state.eeg, channel: ch,
-                             sideText: text, sideColor: color,
-                             placeholder: waitingText)
-                    .frame(minHeight: 90)
+                // Left: channel FFT spectrum. Right: time-domain waveform.
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.eeg, state: state,
+                                 labels: ["ch\(ch)"], channel: ch,
+                                 colorIndex: ch, fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "EEG ch\(ch)", ring: state.eeg, channel: ch,
+                                 sideText: text, sideColor: color,
+                                 placeholder: waitingText)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
             } else if hasECG && i == ecgIndex {
-                WaveformView(title: "ECG", ring: state.ecg, channel: 0,
-                             colorIndex: 2, placeholder: waitingText)
-                    .frame(minHeight: 90)
+                // Left: channel FFT spectrum. Right: time-domain waveform.
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.ecg, state: state,
+                                 labels: ["ECG"], channel: 0,
+                                 colorIndex: 2, fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "ECG", ring: state.ecg, channel: 0,
+                                 colorIndex: 2, placeholder: waitingText)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
             } else if hasBRTH && i == brthIndex {
                 WaveformView(title: "BRTH", ring: state.brth, channel: 0,
                              colorIndex: 3, placeholder: waitingText)
@@ -142,20 +168,49 @@ struct BioPage: View {
         let imp = model.deviceState.impedance(for: .NTF_EEG)
         let fp1 = impedanceSide(imp, 0)
         let fp2 = impedanceSide(imp, 1)
-        WaveformView(title: "EEG fp1", ring: model.deviceState.eeg, channel: 0,
-                     colorIndex: 0, sideText: fp1.0, sideColor: fp1.1,
-                     placeholder: waitingText)
-            .frame(minHeight: 90)
-        WaveformView(title: "EEG fp2", ring: model.deviceState.eeg, channel: 1,
-                     colorIndex: 1, sideText: fp2.0, sideColor: fp2.1,
-                     placeholder: waitingText)
-            .frame(minHeight: 90)
-        WaveformView(title: "PPG red_led", ring: model.deviceState.ppg, channel: 0,
-                     colorIndex: 2, placeholder: waitingText)
-            .frame(minHeight: 90)
-        WaveformView(title: "PPG ir_led", ring: model.deviceState.ppg, channel: 1,
-                     colorIndex: 3, placeholder: waitingText)
-            .frame(minHeight: 90)
+        // Left: channel FFT spectrum. Right: time-domain waveform.
+        HStack(spacing: 8) {
+            SpectrumView(title: "", ring: model.deviceState.eeg,
+                         state: model.deviceState, labels: ["fp1"],
+                         channel: 0, colorIndex: 0, fillHeight: true)
+                .frame(maxWidth: .infinity)
+            WaveformView(title: "EEG fp1", ring: model.deviceState.eeg, channel: 0,
+                         colorIndex: 0, sideText: fp1.0, sideColor: fp1.1,
+                         placeholder: waitingText)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 90)
+        HStack(spacing: 8) {
+            SpectrumView(title: "", ring: model.deviceState.eeg,
+                         state: model.deviceState, labels: ["fp2"],
+                         channel: 1, colorIndex: 1, fillHeight: true)
+                .frame(maxWidth: .infinity)
+            WaveformView(title: "EEG fp2", ring: model.deviceState.eeg, channel: 1,
+                         colorIndex: 1, sideText: fp2.0, sideColor: fp2.1,
+                         placeholder: waitingText)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 90)
+        HStack(spacing: 8) {
+            SpectrumView(title: "", ring: model.deviceState.ppg,
+                         state: model.deviceState, labels: ["red_led"],
+                         channel: 0, colorIndex: 2, fillHeight: true)
+                .frame(maxWidth: .infinity)
+            WaveformView(title: "PPG red_led", ring: model.deviceState.ppg, channel: 0,
+                         colorIndex: 2, placeholder: waitingText)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 90)
+        HStack(spacing: 8) {
+            SpectrumView(title: "", ring: model.deviceState.ppg,
+                         state: model.deviceState, labels: ["ir_led"],
+                         channel: 1, colorIndex: 3, fillHeight: true)
+                .frame(maxWidth: .infinity)
+            WaveformView(title: "PPG ir_led", ring: model.deviceState.ppg, channel: 1,
+                         colorIndex: 3, placeholder: waitingText)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 90)
         WaveformView(title: "SpO2 spo2", ring: model.deviceState.spo2, channel: 0,
                      colorIndex: 4, placeholder: waitingText)
             .frame(minHeight: 90)

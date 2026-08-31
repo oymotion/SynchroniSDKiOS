@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// IMU page: ACC / GYRO / EULER / QUATERNION 2D waveforms with an FFT
-/// spectrum strip under each, a "Real-time Values" panel, and the 3D
-/// quaternion cube.
+/// IMU page: ACC / GYRO / EULER / QUATERNION rows, each split into a left
+/// FFT spectrum half and a right 2D waveform half, plus a "Real-time
+/// Values" panel and the 3D quaternion cube.
 struct ImuPage: View {
     @EnvironmentObject var model: AppModel
 
@@ -12,26 +12,43 @@ struct ImuPage: View {
         ScrollView {
             VStack(spacing: 8) {
                 valuesPanel(state)
-                WaveformView(title: "ACC", ring: state.acc, fixedY: -8...8,
-                             placeholder: waiting)
-                    .frame(minHeight: 90)
-                SpectrumView(title: "ACC Spectrum", ring: state.acc, state: state,
-                             labels: ["ACC-X", "ACC-Y", "ACC-Z"])
-                WaveformView(title: "GYRO", ring: state.gyro, fixedY: -2000...2000,
-                             placeholder: waiting)
-                    .frame(minHeight: 90)
-                SpectrumView(title: "GYRO Spectrum", ring: state.gyro, state: state,
-                             labels: ["GYRO-X", "GYRO-Y", "GYRO-Z"])
-                WaveformView(title: "EULER (deg)", ring: state.euler, fixedY: -180...180,
-                             placeholder: waiting)
-                    .frame(minHeight: 90)
-                SpectrumView(title: "EULER Spectrum", ring: state.euler, state: state,
-                             labels: ["Pitch(Y)", "Roll(X)", "Yaw(Z)"])
-                WaveformView(title: "QUATERNION", ring: state.quat, fixedY: -1...1,
-                             placeholder: waiting)
-                    .frame(minHeight: 90)
-                SpectrumView(title: "QUAT Spectrum", ring: state.quat, state: state,
-                             labels: ["W", "X", "Y", "Z"])
+                // Left: FFT spectrum. Right: time-domain waveform.
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.acc, state: state,
+                                 labels: ["ACC-X", "ACC-Y", "ACC-Z"], fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "ACC", ring: state.acc, fixedY: -8...8,
+                                 placeholder: waiting)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.gyro, state: state,
+                                 labels: ["GYRO-X", "GYRO-Y", "GYRO-Z"], fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "GYRO", ring: state.gyro, fixedY: -2000...2000,
+                                 placeholder: waiting)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.euler, state: state,
+                                 labels: ["Pitch(Y)", "Roll(X)", "Yaw(Z)"], fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "EULER (deg)", ring: state.euler, fixedY: -180...180,
+                                 placeholder: waiting)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
+                HStack(spacing: 8) {
+                    SpectrumView(title: "", ring: state.quat, state: state,
+                                 labels: ["W", "X", "Y", "Z"], fillHeight: true)
+                        .frame(maxWidth: .infinity)
+                    WaveformView(title: "QUATERNION", ring: state.quat, fixedY: -1...1,
+                                 placeholder: waiting)
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(minHeight: 90)
                 CubeView(quat: state.quat)
                     .frame(minHeight: 220)
             }

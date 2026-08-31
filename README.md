@@ -275,6 +275,9 @@ Available keys (value `"ON"` / `"OFF"` unless noted):
 // Per-profile debug output (see Logging controls)
 "DEBUG_LOG_PATH"       // "True" / "False" / absolute path
 "DEBUG_BLE_DATA_PATH"  // bin capture export: "True" / "False" / absolute path
+
+// Flush this device's pending bin capture and SDK log to disk; value ignored
+"FLUSH_BLE_DATA"
 ```
 
 Changing an `NTF_*` key while streaming restarts the data notification so the

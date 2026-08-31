@@ -16,13 +16,13 @@
 		AA0000000000000000000107 /* Views/ImuPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000207 /* Views/ImuPage.swift */; };
 		AA0000000000000000000108 /* Views/WaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000208 /* Views/WaveformView.swift */; };
 		AA0000000000000000000109 /* Views/CubeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000209 /* Views/CubeView.swift */; };
-		AA000000000000000000010D /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020D /* sensor.xcframework */; platformFilters = (ios, ); };
+		AA000000000000000000010D /* sensor.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020D /* sensor.xcframework */; platformFilter = ios; };
 		AA000000000000000000010E /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000000000000000000020E /* CoreBluetooth.framework */; };
-		AA0000000000000000000117 /* libsensor.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); };
-		AA0000000000000000000118 /* libsensor.dylib in Embed dylib */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); };
 		AA0000000000000000000114 /* Model/LiveFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000214 /* Model/LiveFilter.swift */; };
 		AA0000000000000000000115 /* Model/SpectrumCompute.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000215 /* Model/SpectrumCompute.swift */; };
 		AA0000000000000000000116 /* Views/SpectrumView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000216 /* Views/SpectrumView.swift */; };
+		AA0000000000000000000117 /* libsensor.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); };
+		AA0000000000000000000118 /* libsensor.dylib in Embed dylib */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000217 /* libsensor.dylib */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -253,6 +253,7 @@
 				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_ENTITLEMENTS = "";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = SensorDemoSwift/SensorDemoSwift.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = VT7SC62W2Y;
@@ -263,10 +264,13 @@
 					"$(SRCROOT)/../lib/macos/include",
 					"$(SRCROOT)/../lib/macos/include/sensorobjc",
 				);
-				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -290,6 +294,7 @@
 				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_ENTITLEMENTS = "";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = SensorDemoSwift/SensorDemoSwift.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = VT7SC62W2Y;
@@ -300,10 +305,13 @@
 					"$(SRCROOT)/../lib/macos/include",
 					"$(SRCROOT)/../lib/macos/include/sensorobjc",
 				);
-				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				INFOPLIST_FILE = SensorDemoSwift/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/../lib/macos";
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (

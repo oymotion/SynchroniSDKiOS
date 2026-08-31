@@ -5,32 +5,44 @@ final class SpectrumModel: ObservableObject {
     @Published private(set) var freqs: [Float] = []
     @Published private(set) var mags: [[Float]] = []
 
-    private let queue = DispatchQueue(label: "SensorDemoSwift.Spectrum", qos: .userInitiated)
+    /// Shared single worker for every strip.
+    private static let queue = DispatchQueue(label: "SensorDemoSwift.Spectrum", qos: .userInitiated)
     private var busy = false
     private var lastSubmit = Date.distantPast
     private var lastRing: ObjectIdentifier?
+    private var lastChannel: Int?
 
-    func maybeCompute(ring: RingBuffer, state: DeviceState) {
+    func maybeCompute(ring: RingBuffer, channel: Int? = nil, state: DeviceState) {
         let ringId = ObjectIdentifier(ring)
-        if lastRing != ringId {
+        if lastRing != ringId || lastChannel != channel {
             lastRing = ringId
+            lastChannel = channel
             freqs = []
             mags = []
         }
-        guard !busy, Date().timeIntervalSince(lastSubmit) >= 0.5 else { return }
-        let channels = ring.channelCount
+        guard !busy, Date().timeIntervalSince(lastSubmit) >= 0.2 else { return }
         let rate = ring.sampleRate
-        guard channels > 0, ring.filled >= 16, rate > 0 else { return }
-        let snapshot = (0..<channels).map { ring.snapshot(channel: $0) }
+        guard rate > 0, ring.filled >= 16 else { return }
+        let snapshot: [[Float]]
+        if let channel = channel {
+            guard channel >= 0, channel < ring.channelCount else { return }
+            snapshot = [ring.snapshot(channel: channel)]
+        } else {
+            let channels = ring.channelCount
+            guard channels > 0 else { return }
+            snapshot = (0..<channels).map { ring.snapshot(channel: $0) }
+        }
         let epoch = state.currentEpoch()
         busy = true
         lastSubmit = Date()
-        queue.async { [weak self] in
+        Self.queue.async { [weak self] in
             let result = SpectrumCompute.compute(channels: snapshot, rate: rate)
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.busy = false
-                guard epoch == state.currentEpoch() else { return }   // stale device
+                // Stale source (device / channel changed mid-compute).
+                guard self.lastRing == ringId, self.lastChannel == channel,
+                      epoch == state.currentEpoch() else { return }
                 self.freqs = result.freqs
                 self.mags = result.mags
             }
@@ -38,13 +50,20 @@ final class SpectrumModel: ObservableObject {
     }
 }
 
-/// Spectrum strip under one IMU waveform.
+/// Spectrum strip under one IMU waveform, or the left half of one bio
+/// channel row.
 struct SpectrumView: View {
     let title: String
     let ring: RingBuffer
     let state: DeviceState
     /// Channel labels shown top-left in the curve colors.
     var labels: [String] = []
+    /// nil = all channels overlaid; otherwise only this channel.
+    var channel: Int? = nil
+    /// nil = the curve color follows the snapshot channel index.
+    var colorIndex: Int? = nil
+    /// true = the canvas fills the offered height (bio rows).
+    var fillHeight = false
 
     @StateObject private var spectrum = SpectrumModel()
     /// Tick driver; the value itself is not read.
@@ -59,10 +78,10 @@ struct SpectrumView: View {
             }
             .background(Color(white: 0.12))
             .clipShape(RoundedRectangle(cornerRadius: 4))
-            .frame(minHeight: 48, maxHeight: 72)
+            .frame(minHeight: 48, maxHeight: fillHeight ? nil : 72)
         }
         .onReceive(ticker.$tick) { _ in
-            spectrum.maybeCompute(ring: ring, state: state)
+            spectrum.maybeCompute(ring: ring, channel: channel, state: state)
         }
     }
 
@@ -92,7 +111,7 @@ struct SpectrumView: View {
         let yMax = peak > 0 ? Double(peak) * 1.1 : 1.0
 
         for (ch, row) in mags.enumerated() {
-            let color = WaveformView.palette[ch % WaveformView.palette.count]
+            let color = WaveformView.palette[(colorIndex ?? ch) % WaveformView.palette.count]
             var path = Path()
             let count = min(row.count, freqs.count)
             for i in 0..<count {
