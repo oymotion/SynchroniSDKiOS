@@ -19,8 +19,14 @@ struct DevicePage: View {
                     Spacer()
                 }
                 HStack {
-                    Button("Multi Start") { model.multiStart() }
-                        .disabled(model.connectedMacs.isEmpty || model.replaying)
+                    Button(model.streamingMacs.isEmpty ? "Multi Start" : "Multi Stop") {
+                        if model.streamingMacs.isEmpty {
+                            model.multiStart()
+                        } else {
+                            model.multiStop()
+                        }
+                    }
+                    .disabled(model.connectedMacs.isEmpty || model.replaying)
                     Spacer()
                 }
                 if model.devices.isEmpty && !model.replaying {
@@ -134,14 +140,58 @@ struct DevicePage: View {
                     Toggle(AppModel.filterLabels[key] ?? key, isOn: Binding(
                         get: { model.filterStates[key] ?? false },
                         set: { model.setParamToggle(key: key, on: $0) }))
-                        .disabled(!model.controlsEnabled)
+                        .disabled(!model.controlsEnabled || model.filterSupported == nil)
                 }
             }
 
-            Section("EEG Sample Rate") {
-                HStack {
-                    ForEach(AppModel.sampleRateCandidates, id: \.self) { rate in
-                        rateButton(rate)
+            if model.eegSampleRateSectionVisible {
+                Section("EEG Sample Rate") {
+                    HStack {
+                        ForEach(AppModel.sampleRateCandidates.filter { model.isSampleRateVisible($0) },
+                                id: \.self) { rate in
+                            rateButton(rate, current: model.eegSampleRate) {
+                                model.setEegSampleRate(rate)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if model.emgSampleRateSectionVisible {
+                Section("EMG Sample Rate") {
+                    HStack {
+                        ForEach(AppModel.emgSampleRateCandidates.filter { model.isEmgSampleRateVisible($0) },
+                                id: \.self) { rate in
+                            rateButton(rate, current: model.emgSampleRate) {
+                                model.setEmgSampleRate(rate)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if model.imuSampleRateSectionVisible {
+                Section("IMU Sample Rate") {
+                    HStack {
+                        ForEach(AppModel.imuSampleRateCandidates.filter { model.isImuSampleRateVisible($0) },
+                                id: \.self) { rate in
+                            rateButton(rate, current: model.imuSampleRate) {
+                                model.setImuSampleRate(rate)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if model.ppgSampleRateSectionVisible {
+                Section("PPG Sample Rate") {
+                    HStack {
+                        ForEach(AppModel.ppgSampleRateCandidates.filter { model.isPpgSampleRateVisible($0) },
+                                id: \.self) { rate in
+                            rateButton(rate, current: model.ppgSampleRate) {
+                                model.setPpgSampleRate(rate)
+                            }
+                        }
                     }
                 }
             }
@@ -201,16 +251,16 @@ struct DevicePage: View {
 
     /// One sample-rate radio.
     @ViewBuilder
-    private func rateButton(_ rate: Int) -> some View {
-        let enabled = model.controlsEnabled && model.eegSampleRateOptions.contains(rate)
-        if model.eegSampleRate == rate {
-            Button("\(rate) Hz") { model.setEegSampleRate(rate) }
+    private func rateButton(_ rate: Int, current: Int,
+                            action: @escaping () -> Void) -> some View {
+        if current == rate {
+            Button("\(rate) Hz", action: action)
                 .buttonStyle(.borderedProminent)
-                .disabled(!enabled)
+                .disabled(!model.controlsEnabled)
         } else {
-            Button("\(rate) Hz") { model.setEegSampleRate(rate) }
+            Button("\(rate) Hz", action: action)
                 .buttonStyle(.bordered)
-                .disabled(!enabled)
+                .disabled(!model.controlsEnabled)
         }
     }
 }

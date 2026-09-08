@@ -23,6 +23,12 @@ final class DeviceContext {
     var filterSupported: Set<String>?
     var eegSampleRateOptions: [Int] = []
     var eegSampleRate = 0
+    var emgSampleRateOptions: [Int] = []
+    var emgSampleRate = 0
+    var imuSampleRateOptions: [Int] = []
+    var imuSampleRate = 0
+    var ppgSampleRateOptions: [Int] = []
+    var ppgSampleRate = 0
     /// True while the stream is on.
     var streaming = false
     /// Replay session context.
@@ -79,6 +85,15 @@ final class AppModel: NSObject, ObservableObject {
     /// EEG sample-rate control state: options and current value.
     @Published private(set) var eegSampleRateOptions: [Int] = []
     @Published private(set) var eegSampleRate = 0
+    /// EMG sample-rate control state.
+    @Published private(set) var emgSampleRateOptions: [Int] = []
+    @Published private(set) var emgSampleRate = 0
+    /// IMU sample-rate control state.
+    @Published private(set) var imuSampleRateOptions: [Int] = []
+    @Published private(set) var imuSampleRate = 0
+    /// PPG sample-rate control state.
+    @Published private(set) var ppgSampleRateOptions: [Int] = []
+    @Published private(set) var ppgSampleRate = 0
     @Published private(set) var storageText = ""
     /// Current device's DeviceInfo.
     @Published private(set) var deviceInfo: DeviceInfo?
@@ -100,7 +115,7 @@ final class AppModel: NSObject, ObservableObject {
     var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.18"
+    static let demoVersion = "0.1.22"
     /// SDK version string, captured at startup.
     let sdkVersion: String
 
@@ -191,6 +206,12 @@ final class AppModel: NSObject, ObservableObject {
     ]
     /// EEG Sample Rate radio candidates.
     static let sampleRateCandidates = [250, 500, 1000, 2000]
+    /// EMG Sample Rate radio candidates.
+    static let emgSampleRateCandidates = [500, 1000]
+    /// IMU Sample Rate radio candidates.
+    static let imuSampleRateCandidates = [50, 100, 200, 250, 400, 500, 1000, 2000]
+    /// PPG Sample Rate radio candidates.
+    static let ppgSampleRateCandidates = [50, 100, 200, 400, 800, 1000, 1600, 3200]
     /// Bio page slot count.
     static let bioSlotCount = 8
     /// Gesture box text before the first gesture sample.
@@ -209,6 +230,8 @@ final class AppModel: NSObject, ObservableObject {
     private var contexts: [String: DeviceContext] = [:]
     /// Insertion order of contexts.
     private var contextOrder: [String] = []
+    /// Consecutive scan rounds each listed device has been absent.
+    private var absentRounds: [String: Int] = [:]
     /// Active replay members keyed by mac.
     private var replayProfiles: [String: SensorProfile] = [:]
     /// User-initiated disconnects.
@@ -222,6 +245,10 @@ final class AppModel: NSObject, ObservableObject {
     /// Per-MAC caches of the resolved device log/bin-data paths.
     private var lastLogPaths: [String: String] = [:]
     private var lastDataPaths: [String: String] = [:]
+    /// Security-scoped URLs held for the active replay session.
+    private var replayScopedUrls: [URL] = []
+    /// Security-scoped URLs held for the in-flight bin parse.
+    private var parseScopedUrls: [URL] = []
     /// Last 1 Hz rotation of the per-type rate windows.
     private var lastRateTick = Date.distantPast
     private let dataModeLock = NSLock()
@@ -294,6 +321,12 @@ final class AppModel: NSObject, ObservableObject {
         mtuText = ctx?.mtuText ?? "MTU: --"
         eegSampleRateOptions = ctx?.eegSampleRateOptions ?? []
         eegSampleRate = ctx?.eegSampleRate ?? 0
+        emgSampleRateOptions = ctx?.emgSampleRateOptions ?? []
+        emgSampleRate = ctx?.emgSampleRate ?? 0
+        imuSampleRateOptions = ctx?.imuSampleRateOptions ?? []
+        imuSampleRate = ctx?.imuSampleRate ?? 0
+        ppgSampleRateOptions = ctx?.ppgSampleRateOptions ?? []
+        ppgSampleRate = ctx?.ppgSampleRate ?? 0
         ntfStates = ctx?.ntfStates ?? [:]
         filterStates = ctx?.filterStates ?? [:]
         ntfSupported = ctx?.ntfSupported
@@ -374,6 +407,10 @@ final class AppModel: NSObject, ObservableObject {
         replayMacs.removeAll()
         replayNames.removeAll()
         devices.removeAll()
+        for url in replayScopedUrls { url.stopAccessingSecurityScopedResource() }
+        replayScopedUrls.removeAll()
+        for url in parseScopedUrls { url.stopAccessingSecurityScopedResource() }
+        parseScopedUrls.removeAll()
         syncMirrors()
         dataQueueLock.lock()
         dataWorkerStop = true
@@ -487,14 +524,43 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func mergeDevices(_ list: [BLEDevice]) {
+        let present = Set(list.map { $0.mac })
         for d in list {
+            absentRounds[d.mac] = 0
             if let idx = devices.firstIndex(where: { $0.mac == d.mac }) {
                 devices[idx] = d
             } else {
-                devices.append(d)
+                let at = devices.firstIndex(where: { $0.rssi < d.rssi }) ?? devices.count
+                devices.insert(d, at: at)
             }
         }
-        devices.sort { $0.rssi > $1.rssi }
+        contextsLock.lock()
+        let ctxMacs = Set(contexts.keys)
+        contextsLock.unlock()
+        var i = 0
+        while i < devices.count {
+            let mac = devices[i].mac
+            if present.contains(mac) {
+                i += 1
+                continue
+            }
+            if ctxMacs.contains(mac) || replayMacs.contains(mac) {
+                absentRounds[mac] = 0
+                i += 1
+                continue
+            }
+            let missed = (absentRounds[mac] ?? 0) + 1
+            if missed >= 2 {
+                absentRounds.removeValue(forKey: mac)
+                devices.remove(at: i)
+                if selectedMac == mac {
+                    selectedMac = nil
+                }
+            } else {
+                absentRounds[mac] = missed
+                i += 1
+            }
+        }
     }
 
     // MARK: connect chain
@@ -612,6 +678,7 @@ final class AppModel: NSObject, ObservableObject {
             self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
         }
         refreshEegSampleRateState(p, for: ctx)
+        refreshAuxSampleRateStates(p, for: ctx)
 
         p.getBatteryLevel(5) { [weak self] level, _ in
             self?.onMain { _ = self?.filteredBattery(Int(level), for: ctx) }
@@ -789,19 +856,132 @@ final class AppModel: NSObject, ObservableObject {
 
     func setEegSampleRate(_ rate: Int) {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
-        let p = ctx.profile
         guard rate != eegSampleRate, eegSampleRateOptions.contains(rate) else { return }
-        p.setParam(5, key: "EEG_SAMPLE_RATE", value: "\(rate)") { [weak self] result, err in
+        ctx.eegSampleRate = rate
+        eegSampleRate = rate
+        let p = ctx.profile
+        DispatchQueue.main.async { [weak self] in
+            self?.applySampleRate(p, key: "EEG_SAMPLE_RATE", rate: rate, for: ctx)
+        }
+    }
+
+    // MARK: EMG/IMU/PPG sample rates
+
+    /// Re-reads the option lists and the current bound rates.
+    private func refreshAuxSampleRateStates(_ p: SensorProfile, for ctx: DeviceContext) {
+        p.getParam(5, key: "EMG_SAMPLE_RATE_LIST") { [weak self] result, _ in
             self?.onMain {
                 guard let self = self else { return }
-                self.appLog("User: setParam(EEG_SAMPLE_RATE, \(rate)) -> \(result)", profile: p)
-                self.recordSavedParam(ctx.mac, key: "EEG_SAMPLE_RATE", value: "\(rate)", result: result)
+                ctx.emgSampleRateOptions = result.hasPrefix("Error")
+                    ? [] : result.split(separator: "|").compactMap { Int($0) }
+                if ctx === self.currentContext {
+                    self.emgSampleRateOptions = ctx.emgSampleRateOptions
+                }
+            }
+        }
+        p.getParam(5, key: "EMG_SAMPLE_RATE") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self else { return }
+                if !result.hasPrefix("Error"), let rate = Int(result) {
+                    ctx.emgSampleRate = rate
+                    if ctx === self.currentContext {
+                        self.emgSampleRate = rate
+                    }
+                }
+            }
+        }
+        p.getParam(5, key: "IMU_SAMPLE_RATE_LIST") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self else { return }
+                ctx.imuSampleRateOptions = result.hasPrefix("Error")
+                    ? [] : result.split(separator: "|").compactMap { Int($0) }
+                if ctx === self.currentContext {
+                    self.imuSampleRateOptions = ctx.imuSampleRateOptions
+                }
+            }
+        }
+        p.getParam(5, key: "IMU_SAMPLE_RATE") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self else { return }
+                if !result.hasPrefix("Error"), let rate = Int(result) {
+                    ctx.imuSampleRate = rate
+                    if ctx === self.currentContext {
+                        self.imuSampleRate = rate
+                    }
+                }
+            }
+        }
+        p.getParam(5, key: "PPG_SAMPLE_RATE_LIST") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self else { return }
+                ctx.ppgSampleRateOptions = result.hasPrefix("Error")
+                    ? [] : result.split(separator: "|").compactMap { Int($0) }
+                if ctx === self.currentContext {
+                    self.ppgSampleRateOptions = ctx.ppgSampleRateOptions
+                }
+            }
+        }
+        p.getParam(5, key: "PPG_SAMPLE_RATE") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self else { return }
+                if !result.hasPrefix("Error"), let rate = Int(result) {
+                    ctx.ppgSampleRate = rate
+                    if ctx === self.currentContext {
+                        self.ppgSampleRate = rate
+                    }
+                }
+            }
+        }
+    }
+
+    func setEmgSampleRate(_ rate: Int) {
+        guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
+        guard rate != emgSampleRate, emgSampleRateOptions.contains(rate) else { return }
+        ctx.emgSampleRate = rate
+        emgSampleRate = rate
+        let p = ctx.profile
+        DispatchQueue.main.async { [weak self] in
+            self?.applySampleRate(p, key: "EMG_SAMPLE_RATE", rate: rate, for: ctx)
+        }
+    }
+
+    func setImuSampleRate(_ rate: Int) {
+        guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
+        guard rate != imuSampleRate, imuSampleRateOptions.contains(rate) else { return }
+        ctx.imuSampleRate = rate
+        imuSampleRate = rate
+        let p = ctx.profile
+        DispatchQueue.main.async { [weak self] in
+            self?.applySampleRate(p, key: "IMU_SAMPLE_RATE", rate: rate, for: ctx)
+        }
+    }
+
+    func setPpgSampleRate(_ rate: Int) {
+        guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
+        guard rate != ppgSampleRate, ppgSampleRateOptions.contains(rate) else { return }
+        ctx.ppgSampleRate = rate
+        ppgSampleRate = rate
+        let p = ctx.profile
+        DispatchQueue.main.async { [weak self] in
+            self?.applySampleRate(p, key: "PPG_SAMPLE_RATE", rate: rate, for: ctx)
+        }
+    }
+
+    /// Sends the sample-rate setParam; failure reverts through a re-read.
+    private func applySampleRate(_ p: SensorProfile, key: String, rate: Int, for ctx: DeviceContext) {
+        guard ctx.connected, !ctx.isReplay else { return }
+        p.setParam(5, key: key, value: "\(rate)") { [weak self] result, err in
+            self?.onMain {
+                guard let self = self else { return }
+                self.appLog("User: setParam(\(key), \(rate)) -> \(result)", profile: p)
+                self.recordSavedParam(ctx.mac, key: key, value: "\(rate)", result: result)
                 if err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:") {
-                    self.statusText = "EEG_SAMPLE_RATE failed: \(err?.localizedDescription ?? result)"
+                    self.statusText = "\(key) failed: \(err?.localizedDescription ?? result)"
                 } else {
                     ctx.state.clearBuffers()
                 }
                 self.refreshEegSampleRateState(p, for: ctx)
+                self.refreshAuxSampleRateStates(p, for: ctx)
             }
         }
     }
@@ -822,14 +1002,14 @@ final class AppModel: NSObject, ObservableObject {
                     self.statusText = "\(key) failed: \(err?.localizedDescription ?? result)"
                 } else {
                     ctx.state.clearBuffers()
-                    if AppModel.ntfKeys.contains(key) {
-                        p.getParam(5, key: "NTF") { [weak self] result, _ in
-                            self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
-                        }
-                    } else {
-                        p.getParam(5, key: "FILTER") { [weak self] result, _ in
-                            self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
-                        }
+                }
+                if AppModel.ntfKeys.contains(key) {
+                    p.getParam(5, key: "NTF") { [weak self] result, _ in
+                        self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
+                    }
+                } else {
+                    p.getParam(5, key: "FILTER") { [weak self] result, _ in
+                        self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
                     }
                 }
             }
@@ -863,6 +1043,7 @@ final class AppModel: NSObject, ObservableObject {
                     self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
                 }
                 self.refreshEegSampleRateState(p, for: ctx)
+                self.refreshAuxSampleRateStates(p, for: ctx)
                 return
             }
             let param = params[index]
@@ -910,6 +1091,11 @@ final class AppModel: NSObject, ObservableObject {
             }
             ctx.ntfSupported = supported
         } else {
+            guard !result.hasPrefix("Error") else {
+                ctx.filterSupported = nil
+                syncMirrors()
+                return
+            }
             var supported = Set<String>()
             for key in keys where map[key] != nil {
                 supported.insert(key)
@@ -925,6 +1111,46 @@ final class AppModel: NSObject, ObservableObject {
             return ntfSupported?.contains(key) ?? true
         }
         return filterSupported?.contains(key) ?? true
+    }
+
+    /// EEG sample-rate section visibility.
+    var eegSampleRateSectionVisible: Bool {
+        !eegSampleRateOptions.isEmpty
+    }
+
+    /// EMG sample-rate section visibility.
+    var emgSampleRateSectionVisible: Bool {
+        !emgSampleRateOptions.isEmpty
+    }
+
+    /// IMU sample-rate section visibility.
+    var imuSampleRateSectionVisible: Bool {
+        !imuSampleRateOptions.isEmpty
+    }
+
+    /// PPG sample-rate section visibility.
+    var ppgSampleRateSectionVisible: Bool {
+        !ppgSampleRateOptions.isEmpty
+    }
+
+    /// EEG sample-rate candidate visibility.
+    func isSampleRateVisible(_ rate: Int) -> Bool {
+        eegSampleRateOptions.contains(rate)
+    }
+
+    /// EMG sample-rate candidate visibility.
+    func isEmgSampleRateVisible(_ rate: Int) -> Bool {
+        emgSampleRateOptions.contains(rate)
+    }
+
+    /// IMU sample-rate candidate visibility.
+    func isImuSampleRateVisible(_ rate: Int) -> Bool {
+        imuSampleRateOptions.contains(rate)
+    }
+
+    /// PPG sample-rate candidate visibility.
+    func isPpgSampleRateVisible(_ rate: Int) -> Bool {
+        ppgSampleRateOptions.contains(rate)
     }
 
     // MARK: bio paging
@@ -1058,12 +1284,12 @@ final class AppModel: NSObject, ObservableObject {
             }()
             let version = controller.getVersion().replacingOccurrences(of: ".", with: "_")
             let path = dir.appendingPathComponent("sensorsdklog/\(stamp)_\(version)").path
-            controller.setLogPath(true, path: path)
+            _ = controller.setParam("LOG_PATH", value: path)
             storageText = "Logs & bins: \(path)"
         } else {
             storageText = ""
         }
-        controller.setDebugEnabled(debugLogEnabled)
+        _ = controller.setParam("DEBUG_ENABLED", value: debugLogEnabled ? "True" : "False")
     }
 
     // MARK: bin replay / parse
@@ -1103,6 +1329,15 @@ final class AppModel: NSObject, ObservableObject {
         if info.deviceInfo.eegSampleRate > 0 {
             ctx.eegSampleRate = Int(info.deviceInfo.eegSampleRate)
         }
+        if info.deviceInfo.emgSampleRate > 0 {
+            ctx.emgSampleRate = Int(info.deviceInfo.emgSampleRate)
+        }
+        if info.deviceInfo.accSampleRate > 0 {
+            ctx.imuSampleRate = Int(info.deviceInfo.accSampleRate)
+        }
+        if info.deviceInfo.ppgSampleRate > 0 {
+            ctx.ppgSampleRate = Int(info.deviceInfo.ppgSampleRate)
+        }
         contextsLock.lock()
         contexts[mac] = ctx
         if !contextOrder.contains(mac) { contextOrder.append(mac) }
@@ -1113,13 +1348,13 @@ final class AppModel: NSObject, ObservableObject {
     func replayBin(url: URL) {
         guard canStartReplay() else { return }
         let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let path = url.path
         appLog("User: replay bin file: \(path)")
         guard let info = controller.getBinFileInfo(path), info.valid, !info.mac.isEmpty else {
             appLog("App: invalid bin file (no config record): \(path)", level: "W")
             statusText = "Invalid bin file: no config record found"
             replayText = statusText
+            if accessing { url.stopAccessingSecurityScopedResource() }
             return
         }
         stopScanForReplay()
@@ -1127,10 +1362,12 @@ final class AppModel: NSObject, ObservableObject {
         guard let p = controller.replayBinFile(path, deviceMac: mac, realtime: true, timeout: 5) else {
             statusText = "Replay failed to start"
             replayText = statusText
+            if accessing { url.stopAccessingSecurityScopedResource() }
             return
         }
         replayStopRequested = false
         replayPaused = false
+        if accessing { replayScopedUrls.append(url) }
         addReplayMember(p, info: info)
         selectedMac = mac
         syncMirrors()
@@ -1152,7 +1389,6 @@ final class AppModel: NSObject, ObservableObject {
         for url in urls where url.startAccessingSecurityScopedResource() {
             scoped.append(url)
         }
-        defer { for url in scoped { url.stopAccessingSecurityScopedResource() } }
         var paths: [String] = []
         var macs: [String] = []
         var infos: [String: BinFileInfo] = [:]
@@ -1176,6 +1412,7 @@ final class AppModel: NSObject, ObservableObject {
         guard !paths.isEmpty else {
             statusText = "Invalid bin file: no config record found"
             replayText = statusText
+            for url in scoped { url.stopAccessingSecurityScopedResource() }
             return
         }
         stopScanForReplay()
@@ -1196,8 +1433,10 @@ final class AppModel: NSObject, ObservableObject {
         guard !replayMacs.isEmpty else {
             statusText = "Replay failed to start"
             replayText = statusText
+            for url in scoped { url.stopAccessingSecurityScopedResource() }
             return
         }
+        replayScopedUrls.append(contentsOf: scoped)
         selectedMac = replayMacs.first
         syncMirrors()
         let text = "Replaying: \(started.joined(separator: " + ")) (realtime) ..."
@@ -1271,6 +1510,8 @@ final class AppModel: NSObject, ObservableObject {
         appLog("App: replay done: \(message)", profile: p)
         removeReplayContext(mac: mac)
         guard replayMacs.isEmpty else { return }
+        for url in replayScopedUrls { url.stopAccessingSecurityScopedResource() }
+        replayScopedUrls.removeAll()
         replayStopRequested = false
         replayPaused = false
         statusText = message
@@ -1281,17 +1522,21 @@ final class AppModel: NSObject, ObservableObject {
     func parseBinToCsv(url: URL) {
         guard !analyzing else { return }
         let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let binPath = url.path
         let csvPath = url.deletingPathExtension().appendingPathExtension("csv").path
         appLog("User: analyze bin file: \(binPath)")
         analyzing = true
+        if accessing { parseScopedUrls.append(url) }
         replayText = "Analyzing: \(url.lastPathComponent) ..."
         DispatchQueue.global().async { [weak self] in
             let result = self?.controller.parseBin(toCsv: binPath, csvPath: csvPath) ?? ""
             self?.onMain {
                 guard let self = self else { return }
                 self.analyzing = false
+                for scopedUrl in self.parseScopedUrls {
+                    scopedUrl.stopAccessingSecurityScopedResource()
+                }
+                self.parseScopedUrls.removeAll()
                 if result.hasPrefix("Error") {
                     self.appLog("App: analyze failed: \(result)", level: "E")
                     self.replayText = "Analyze failed: \(result)"
@@ -1391,6 +1636,12 @@ extension AppModel: SensorProfileDelegate {
         ctx.filterSupported = nil
         ctx.eegSampleRateOptions = []
         ctx.eegSampleRate = 0
+        ctx.emgSampleRateOptions = []
+        ctx.emgSampleRate = 0
+        ctx.imuSampleRateOptions = []
+        ctx.imuSampleRate = 0
+        ctx.ppgSampleRateOptions = []
+        ctx.ppgSampleRate = 0
         ctx.streaming = false
         contextsLock.lock()
         contexts.removeValue(forKey: mac)
@@ -1464,6 +1715,15 @@ extension AppModel: SensorProfileDelegate {
             self.applyLinkInfo(info, for: ctx)
             if info.eegSampleRate > 0 && Int(info.eegSampleRate) != ctx.eegSampleRate {
                 ctx.eegSampleRate = Int(info.eegSampleRate)
+            }
+            if info.emgSampleRate > 0 && Int(info.emgSampleRate) != ctx.emgSampleRate {
+                ctx.emgSampleRate = Int(info.emgSampleRate)
+            }
+            if info.accSampleRate > 0 && Int(info.accSampleRate) != ctx.imuSampleRate {
+                ctx.imuSampleRate = Int(info.accSampleRate)
+            }
+            if info.ppgSampleRate > 0 && Int(info.ppgSampleRate) != ctx.ppgSampleRate {
+                ctx.ppgSampleRate = Int(info.ppgSampleRate)
             }
             self.syncMirrors()
         }
