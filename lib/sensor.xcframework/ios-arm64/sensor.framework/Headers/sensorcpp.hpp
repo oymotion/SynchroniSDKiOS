@@ -4,7 +4,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -104,6 +106,14 @@ inline std::string strOrEmpty(const char* s) {
     return s != nullptr ? std::string(s) : std::string();
 }
 
+inline void reportCallbackException(const char* what) noexcept {
+    if (what != nullptr) {
+        std::fprintf(stderr, "sensorcpp callback exception: %s\n", what);
+    } else {
+        std::fprintf(stderr, "sensorcpp callback exception: unknown\n");
+    }
+}
+
 inline BLEDevice bleDeviceFromNative(const sen_ble_device_t& d) {
     BLEDevice out;
     out.name = fixedString(d.name, sizeof(d.name));
@@ -197,7 +207,10 @@ inline void completionTrampoline(void* ctx, int result, const char* errorMsg) no
         if (holder && holder->fn) {
             holder->fn(result != 0, strOrEmpty(errorMsg));
         }
+    } catch (const std::exception& e) {
+        reportCallbackException(e.what());
     } catch (...) {
+        reportCallbackException(nullptr);
     }
 }
 
@@ -208,7 +221,10 @@ inline void paramTrampoline(void* ctx, const char* result, const char* errorMsg)
         if (holder && holder->fn) {
             holder->fn(strOrEmpty(result), strOrEmpty(errorMsg));
         }
+    } catch (const std::exception& e) {
+        reportCallbackException(e.what());
     } catch (...) {
+        reportCallbackException(nullptr);
     }
 }
 
@@ -219,7 +235,10 @@ inline void batteryTrampoline(void* ctx, int result, const char* errorMsg) noexc
         if (holder && holder->fn) {
             holder->fn(result, strOrEmpty(errorMsg));
         }
+    } catch (const std::exception& e) {
+        reportCallbackException(e.what());
     } catch (...) {
+        reportCallbackException(nullptr);
     }
 }
 
@@ -235,7 +254,10 @@ inline void infoTrampoline(void* ctx, const sen_device_info_t* info,
             }
             holder->fn(copy, strOrEmpty(errorMsg));
         }
+    } catch (const std::exception& e) {
+        reportCallbackException(e.what());
     } catch (...) {
+        reportCallbackException(nullptr);
     }
 }
 
@@ -258,7 +280,10 @@ inline void multiResultTrampoline(void* ctx, const char* const* macs, const int*
             result[mac] = std::make_pair(ok, strOrEmpty(err));
         }
         holder->fn(result);
+    } catch (const std::exception& e) {
+        reportCallbackException(e.what());
     } catch (...) {
+        reportCallbackException(nullptr);
     }
 }
 
@@ -586,7 +611,10 @@ public:
     void log(const std::string& message, const std::string& level = "I") const {
         try {
             sen_profile_log(_handle, message.c_str(), level.c_str());
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -620,7 +648,10 @@ private:
                 batch.emplace_back(views[i]);
             }
             self->_cbs.onData(self, batch);
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -630,7 +661,10 @@ private:
             if (self != nullptr && self->_cbs.onStateChange) {
                 self->_cbs.onStateChange(self, newState);
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -640,7 +674,10 @@ private:
             if (self != nullptr && self->_cbs.onError) {
                 self->_cbs.onError(self, detail::strOrEmpty(errorMsg));
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -650,7 +687,10 @@ private:
             if (self != nullptr && self->_cbs.onPowerChange) {
                 self->_cbs.onPowerChange(self, power);
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -673,7 +713,10 @@ private:
                 }
             };
             self->_cbs.onAutoReconnect(self, hasLastSession != 0, std::move(answerFn));
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -684,7 +727,10 @@ private:
             if (self != nullptr && self->_cbs.onDeviceInfoUpdate && info != nullptr) {
                 self->_cbs.onDeviceInfoUpdate(self, detail::deviceInfoFromNative(*info));
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -695,7 +741,10 @@ private:
             if (self != nullptr && self->_cbs.onDataTransferStateChange) {
                 self->_cbs.onDataTransferStateChange(self, isTransferring != 0);
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -860,14 +909,20 @@ public:
     void log(const std::string& message, const std::string& level = "I") {
         try {
             sen_controller_log(_handle, message.c_str(), level.c_str());
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
     void onSuspend() {
         try {
             sen_controller_on_suspend(_handle);
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -988,7 +1043,10 @@ private:
                 list.push_back(detail::bleDeviceFromNative(devices[i]));
             }
             cbCtx->cbs.onScanResult(list);
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
@@ -998,7 +1056,10 @@ private:
             if (cbCtx != nullptr && cbCtx->cbs.onEnableChanged) {
                 cbCtx->cbs.onEnableChanged(enabled != 0);
             }
+        } catch (const std::exception& e) {
+            detail::reportCallbackException(e.what());
         } catch (...) {
+            detail::reportCallbackException(nullptr);
         }
     }
 
