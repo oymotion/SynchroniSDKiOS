@@ -125,6 +125,7 @@ final class DeviceState {
     let eeg = RingBuffer()
     let ecg = RingBuffer()
     let brth = RingBuffer()
+    let magAngle = RingBuffer()
     let ppg = RingBuffer()
     let spo2 = RingBuffer()
 
@@ -144,14 +145,17 @@ final class DeviceState {
     private(set) var lostPackages = 0
 
     // Per-type accounting for the stats/rate labels.
-    private var rateCounts: [Int: Int64] = [:]     // valid samples in the current window
-    private var actualRates: [Int: Double] = [:]   // rotated once per second
+    private var rateTotalCounts: [Int: Int64] = [:] // valid samples since the stream's first packet
+    private var rateStreamStart: [Int: Date] = [:]  // first-packet wall clock per stream session
+    private var rateStreamTags: [Int: UInt32] = [:] // batch startTimeStamp session tag per stream
+    private var actualRates: [Int: Double] = [:]    // cumulative average, refreshed once per second
     private var nominalRates: [Int: Float] = [:]   // batch-reported sample rate
     private var nominalChannels: [Int: Int] = [:]  // batch-reported channel count
     private var lostCounts: [Int: Int] = [:]       // latest per-type lostPackageCount
-    private var rateWindowStart = Date()
-    /// Stream-start wall clock (Unix seconds) and first-packet delay (ms).
-    private var streamStartTimeSec: Double = 0
+    private var rateLastDataTime: Date?
+    /// Stream-start wall clock (Unix seconds) per data type, plus the
+    /// first-packet delay (ms).
+    private var streamStartTimes: [Int: Double] = [:]
     private var streamDelayMs: UInt32 = 0
 
     /// Per-type stats display order and labels.
@@ -160,11 +164,12 @@ final class DeviceState {
         (.NTF_QUATERNION, "Quat"), (.NTF_EULER, "Euler"), (.NTF_EMG, "EMG"),
         (.NTF_EEG, "EEG"), (.NTF_PPG, "PPG"), (.NTF_SPO2, "SpO2"),
         (.NTF_ECG, "ECG"), (.NTF_BRTH, "BRTH"), (.NTF_GEST, "GEST"),
+        (.NTF_MAG_ANGLE, "Angle"),
     ]
 
     private static let startTimeFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        f.dateFormat = "HH:mm:ss.SSS"
         return f
     }()
 
@@ -179,18 +184,20 @@ final class DeviceState {
         batchCount = 0
         sampleTotal = 0
         lostPackages = 0
-        rateCounts = [:]
+        rateTotalCounts = [:]
+        rateStreamStart = [:]
+        rateStreamTags = [:]
         actualRates = [:]
         nominalRates = [:]
         nominalChannels = [:]
         lostCounts = [:]
-        rateWindowStart = Date()
-        streamStartTimeSec = 0
+        rateLastDataTime = nil
+        streamStartTimes = [:]
         streamDelayMs = 0
         epoch += 1
         lock.unlock()
         liveFilter.reset()
-        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, ppg, spo2] {
+        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2] {
             ring.reset()
         }
     }
@@ -198,7 +205,7 @@ final class DeviceState {
     /// Zeroes every ring's content and drops the impedance / gesture
     /// readouts.
     func clearBuffers() {
-        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, ppg, spo2] {
+        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2] {
             ring.clear()
         }
         lock.lock()
@@ -213,7 +220,7 @@ final class DeviceState {
         return epoch
     }
 
-    /// Seeds the bio mode from DeviceInfo (PPG > EEG > EMG).
+    /// Seeds the bio mode from DeviceInfo (PPG > EEG > EMG/MAG).
     func seedBioMode(from info: DeviceInfo) {
         lock.lock()
         defer { lock.unlock() }
@@ -222,6 +229,8 @@ final class DeviceState {
         } else if info.eegSampleRate > 0 && info.eegChannelCount > 0 {
             bioMode = .eeg
         } else if info.emgSampleRate > 0 && info.emgChannelCount > 0 {
+            bioMode = .emg
+        } else if info.magAngleChannelCount > 0 {
             bioMode = .emg
         }
     }
@@ -256,7 +265,7 @@ final class DeviceState {
                 }
             }
             if valid > 0 {
-                rateCounts[type] = (rateCounts[type] ?? 0) + Int64(valid)
+                noteRateSamples(type: type, sessionTag: b.startTimeStamp, valid: valid)
             }
         }
         if b.sampleRate > 0 {
@@ -266,7 +275,7 @@ final class DeviceState {
             nominalChannels[type] = Int(b.channelCount)
         }
         if b.startTimeSec > 0 {
-            streamStartTimeSec = b.startTimeSec
+            streamStartTimes[type] = b.startTimeSec
         }
         if b.delay > 0 {
             streamDelayMs = b.delay
@@ -293,29 +302,50 @@ final class DeviceState {
             }
             let t = Int(type.rawValue)
             if valid > 0 {
-                rateCounts[t] = (rateCounts[t] ?? 0) + Int64(valid)
+                noteRateSamples(type: t, sessionTag: b.startTimeStamp, valid: valid)
             }
             if b.sampleRate > 0 {
                 nominalRates[t] = b.sampleRate
             }
             nominalChannels[t] = count
+            if b.startTimeSec > 0 {
+                streamStartTimes[t] = b.startTimeSec
+            }
         }
     }
 
-    /// Rotates the accumulated per-type sample counts into actualRates; call
-    /// once per second.
+    /// Caller holds the lock. Accumulates from the first packet of each
+    /// stream session; a session-tag change (stream restart) re-accumulates.
+    private func noteRateSamples(type: Int, sessionTag: UInt32, valid: Int) {
+        let now = Date()
+        if rateStreamTags[type] != sessionTag {
+            rateStreamTags[type] = sessionTag
+            rateTotalCounts[type] = 0
+            rateStreamStart[type] = now
+        }
+        rateTotalCounts[type] = (rateTotalCounts[type] ?? 0) + Int64(valid)
+        rateLastDataTime = now
+    }
+
+    /// Recomputes the per-type cumulative average rates; call once per
+    /// second. Clears everything after two seconds without any data.
     func updateActualRates() {
         let now = Date()
         lock.lock()
         defer { lock.unlock() }
-        let elapsed = now.timeIntervalSince(rateWindowStart)
-        guard elapsed > 0 else { return }
-        actualRates.removeAll()
-        for (t, c) in rateCounts {
-            actualRates[t] = Double(c) / elapsed
+        if let last = rateLastDataTime, now.timeIntervalSince(last) > 2.0 {
+            actualRates = [:]
+            rateTotalCounts = [:]
+            rateStreamStart = [:]
+            rateStreamTags = [:]
+            rateLastDataTime = nil
+            return
         }
-        rateCounts.removeAll()
-        rateWindowStart = now
+        actualRates.removeAll()
+        for (t, total) in rateTotalCounts {
+            let elapsed = now.timeIntervalSince(rateStreamStart[t] ?? now)
+            actualRates[t] = Double(total) / max(elapsed, 0.001)
+        }
     }
 
     private static func hzText(_ rate: Float) -> String {
@@ -339,7 +369,8 @@ final class DeviceState {
         return parts.joined(separator: " | ")
     }
 
-    /// Measured-vs-nominal rate line.
+    /// Measured-vs-nominal rate line; each type carries its own stream-start
+    /// wall clock.
     func buildRateText() -> String {
         lock.lock()
         defer { lock.unlock() }
@@ -349,11 +380,12 @@ final class DeviceState {
             guard let actual = actualRates[t] else { continue }
             let nominal = nominalRates[t] ?? 0
             let nominalText = nominal > 0 ? DeviceState.hzText(nominal) : "--"
-            entries.append("\(label) \(String(format: "%.1f", actual)) / \(nominalText)Hz")
-        }
-        if streamStartTimeSec > 0 {
-            let start = Date(timeIntervalSince1970: streamStartTimeSec)
-            entries.append("start \(DeviceState.startTimeFormatter.string(from: start))")
+            var entry = "\(label) \(String(format: "%.1f", actual)) / \(nominalText)Hz"
+            if let startSec = streamStartTimes[t], startSec > 0 {
+                let start = Date(timeIntervalSince1970: startSec)
+                entry += " (start \(DeviceState.startTimeFormatter.string(from: start)))"
+            }
+            entries.append(entry)
         }
         if streamDelayMs > 0 {
             entries.append("delay \(streamDelayMs)ms")
@@ -385,12 +417,12 @@ final class DeviceState {
         case .NTF_QUATERNION: return "QUAT"
         case .NTF_GEST: return "GEST"
         case .NTF_EMG: return "EMG"
-        case .NTF_MAG_ANGLE: return "MAG"
+        case .NTF_MAG_ANGLE: return "Angle"
         case .NTF_EEG: return "EEG"
         case .NTF_PPG: return "PPG"
         case .NTF_SPO2: return "SPO2"
         case .NTF_ECG: return "ECG"
-        case .NTF_IMPEDANCE: return "IMP"
+        case .NTF_IMPEDANCE: return "IMPE"
         case .NTF_IMU: return "IMU"
         case .NTF_ADS: return "ADS"
         case .NTF_BRTH: return "BRTH"
@@ -458,6 +490,9 @@ final class DeviceState {
             captureImpedance(b, type: .NTF_ECG)
         case .NTF_BRTH:
             feedSegment(b, ring: brth, firstChannel: 0, channels: Int(b.channelCount), seconds: DeviceState.bioSeconds, bio: true)
+        case .NTF_MAG_ANGLE:
+            feedSegment(b, ring: magAngle, firstChannel: 0, channels: Int(b.channelCount), seconds: DeviceState.bioSeconds)
+            repairBioMode(.emg)
         case .NTF_PPG:
             feedSegment(b, ring: ppg, firstChannel: 0, channels: Int(b.channelCount), seconds: DeviceState.imuSeconds, bio: true)
             repairBioMode(.ppg)

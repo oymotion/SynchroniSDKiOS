@@ -27,6 +27,12 @@ struct DevicePage: View {
                         }
                     }
                     .disabled(model.connectedMacs.isEmpty || model.replaying)
+#if os(macOS)
+                    Button(model.checkingDongle ? "Checking Dongle..." : "Check Dongle") {
+                        model.checkDongle()
+                    }
+                    .disabled(model.checkingDongle || model.replaying)
+#endif
                     Spacer()
                 }
                 if model.devices.isEmpty && !model.replaying {
@@ -90,7 +96,7 @@ struct DevicePage: View {
             }
 
             Section("Status") {
-                Text("SensorSDK \(model.sdkVersion), demo v\(AppModel.demoVersion)")
+                Text("SensorSDK \(model.sdkVersion) | Backend: \(model.backendName), demo v\(AppModel.demoVersion)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(model.statusText)
@@ -118,6 +124,10 @@ struct DevicePage: View {
                     .disabled(model.replaying)
                 Toggle("Enable Debug Bin Data", isOn: $model.debugBinEnabled)
                     .disabled(model.replaying)
+#if os(macOS)
+                Toggle("Enable debug dongle", isOn: $model.dongleDebugEnabled)
+                    .disabled(model.replaying)
+#endif
                 if !model.storageText.isEmpty {
                     Text(model.storageText)
                         .font(.caption2)
@@ -233,6 +243,13 @@ struct DevicePage: View {
             }
         }
         .formStyle(.grouped)
+        .alert("Check Setup Dongle", isPresented: Binding(
+            get: { model.dongleCheckMessage != nil },
+            set: { if !$0 { model.dongleCheckMessage = nil } })) {
+            Button("OK") { model.dongleCheckMessage = nil }
+        } message: {
+            Text(model.dongleCheckMessage ?? "")
+        }
         .fileImporter(isPresented: $showBinPicker,
                       allowedContentTypes: [.sensorBin],
                       allowsMultipleSelection: multiReplayPicker) { result in

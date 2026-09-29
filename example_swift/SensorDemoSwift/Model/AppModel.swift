@@ -115,9 +115,11 @@ final class AppModel: NSObject, ObservableObject {
     var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.22"
+    static let demoVersion = "0.1.36"
     /// SDK version string, captured at startup.
     let sdkVersion: String
+    /// Active BLE backend name, re-read on the 1 Hz tick.
+    @Published private(set) var backendName = ""
 
     /// Live Filter band index (0 = Off).
     @Published var liveFilterBand = 0 {
@@ -186,6 +188,16 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
     }
+    /// "Enable debug dongle" toggle. macOS only.
+    @Published var dongleDebugEnabled = true {
+        didSet {
+            appLog("User: dongle debug \(dongleDebugEnabled ? "ON" : "OFF")")
+            applyDongleDebug()
+        }
+    }
+    /// "Check Dongle" in-flight flag and result dialog text. macOS only.
+    @Published private(set) var checkingDongle = false
+    @Published var dongleCheckMessage: String?
 
     /// NTF / FILTER switch states and support sets.
     @Published private(set) var ntfStates: [String: Bool] = [:]
@@ -193,12 +205,13 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var ntfSupported: Set<String>?
     @Published private(set) var filterSupported: Set<String>?
 
-    static let ntfKeys = ["NTF_EEG", "NTF_EMG", "NTF_GEST", "NTF_PPG", "NTF_SPO2", "NTF_IMU"]
+    static let ntfKeys = ["NTF_EEG", "NTF_EMG", "NTF_GEST", "NTF_PPG", "NTF_SPO2", "NTF_IMU", "NTF_MAG_ANGLE", "NTF_IMPEDANCE"]
     static let filterKeys = ["FILTER_50HZ", "FILTER_60HZ", "FILTER_HPF", "FILTER_LPF"]
     /// Friendly switch labels.
     static let ntfLabels: [String: String] = [
         "NTF_EEG": "EEG", "NTF_EMG": "EMG", "NTF_GEST": "GESTURE",
         "NTF_PPG": "PPG", "NTF_SPO2": "SpO2", "NTF_IMU": "IMU",
+        "NTF_MAG_ANGLE": "Angle", "NTF_IMPEDANCE": "IMPE",
     ]
     static let filterLabels: [String: String] = [
         "FILTER_50HZ": "50Hz", "FILTER_60HZ": "60Hz",
@@ -346,6 +359,7 @@ final class AppModel: NSObject, ObservableObject {
         super.init()
         controller.delegate = self
         applyDebugLog()
+        applyDongleDebug()
         statusText = "SensorSDK \(sdkVersion) \u{2014} Press Start Scan"
         let worker = Thread { [weak self] in self?.drainDataQueue() }
         worker.name = "SensorDataDrain"
@@ -466,6 +480,12 @@ final class AppModel: NSObject, ObservableObject {
             statusText = state.buildStatusText(head: head)
         }
         rateText = state.buildRateText()
+        controller.getParam("BACK_END") { [weak self] result, _ in
+            self?.onMain {
+                guard let self = self, self.backendName != result else { return }
+                self.backendName = result
+            }
+        }
     }
 
     // MARK: data pipeline
@@ -662,7 +682,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private func afterInit(_ p: SensorProfile) {
         guard let ctx = context(for: p.device.mac) else { return }
-        let info = p.deviceInfo
+        guard let info = p.deviceInfo else { return }
         ctx.info = info
         ctx.modelText = "Model: \(info.modelName ?? "-")"
         ctx.hwText = "HW: \(info.hardwareVersion ?? "-")"
@@ -769,12 +789,11 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func startMulti(_ targets: [DeviceContext]) {
-        let sameModel = Set(targets.map { $0.info?.modelName ?? "" }).count == 1
         statusText = "Multi starting ..."
         controller.multiStartDataNotification(targets.map { $0.profile },
-                                              timeoutMs: sameModel ? 30000 : 60000,
-                                              maxDelayDispersionMs: sameModel ? 5 : -1,
-                                              maxAttempts: sameModel ? 3 : 5) { [weak self] results, errors in
+                                              timeoutMs: 0,
+                                              maxDelayDispersionMs: -1,
+                                              maxAttempts: 1) { [weak self] results, errors in
             DispatchQueue.main.async {
                 self?.reportMulti("start", total: targets.count,
                                   results: results, errors: errors)
@@ -812,6 +831,60 @@ final class AppModel: NSObject, ObservableObject {
         } else {
             statusText = "Multi \(action) failed on: \(failed.joined(separator: ", "))"
         }
+    }
+
+    // MARK: dongle setup check
+
+    /// Runs the dongle setup check; the result shows in a dialog.
+    func checkDongle() {
+        appLog("User: check setup dongle")
+        checkingDongle = true
+        controller.checkSetupDongle { [weak self] result, err in
+            let text = err.map { "Error: \($0.localizedDescription)" } ?? result
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.checkingDongle = false
+                self.appLog("App: check dongle result: \(text.components(separatedBy: "\n").first ?? text)")
+                self.contextsLock.lock()
+                let anyConnected = self.contexts.values.contains { $0.connected }
+                self.contextsLock.unlock()
+                self.dongleCheckMessage = "Backend: \(self.backendName)\n"
+                    + Self.dongleCheckText(text, anyConnected: anyConnected)
+            }
+        }
+    }
+
+    private static func dongleCheckText(_ result: String, anyConnected: Bool) -> String {
+        guard result.hasPrefix("OK") else { return result }
+        let parts = result.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        let firstLine = String(parts[0])
+        let extra = parts.count > 1
+            ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        var msg: String
+        if let colon = firstLine.firstIndex(of: ":") {
+            let count = firstLine[firstLine.index(after: colon)...]
+                .trimmingCharacters(in: .whitespaces)
+            let halves = count.split(separator: "/")
+            let usable = String(halves[0])
+            let total = halves.count > 1 ? String(halves[1]) : nil
+            if usable == "0" && anyConnected {
+                msg = "Every USB BLE dongle is in use by the current connections."
+                if let total = total { msg += "\nTotal dongles plugged: \(total)" }
+                msg += "\nDisconnect a device to free one."
+            } else if usable == "0" {
+                msg = "USB BLE dongle(s) plugged in but none is usable by the SDK."
+                if let total = total { msg += "\nTotal dongles plugged: \(total)" }
+                msg += "\nDisconnect all devices and run Check Dongle again to set up the driver."
+            } else {
+                msg = "USB BLE dongle is ready (usable by the SDK)."
+                msg += "\nUsable dongle count: \(usable)"
+                if let total = total { msg += "\nTotal dongles plugged: \(total)" }
+            }
+        } else {
+            msg = "No usable USB BLE dongle detected; the SDK is using the OS Bluetooth stack."
+        }
+        if !extra.isEmpty { msg += "\n\(extra)" }
+        return msg
     }
 
     // MARK: link / MTU info
@@ -1079,6 +1152,8 @@ final class AppModel: NSObject, ObservableObject {
                 "NTF_PPG": Int(info?.ppgChannelCount ?? 0),
                 "NTF_SPO2": Int(info?.spo2ChannelCount ?? 0),
                 "NTF_IMU": Int(max(info?.accChannelCount ?? 0, info?.gyroChannelCount ?? 0)),
+                "NTF_MAG_ANGLE": Int(info?.magAngleChannelCount ?? 0),
+                "NTF_IMPEDANCE": Int(info?.impeChannelCount ?? 0),
             ]
             var supported = Set<String>()
             for key in keys {
@@ -1162,7 +1237,8 @@ final class AppModel: NSObject, ObservableObject {
         let state = ctx.state
         let hasECG = Int(info?.ecgChannelCount ?? 0) > 0 || state.ecg.channelCount > 0
         let hasBRTH = Int(info?.brthChannelCount ?? 0) > 0 || state.brth.channelCount > 0
-        let perPage = AppModel.bioSlotCount - (hasECG ? 1 : 0) - (hasBRTH ? 1 : 0)
+        let hasMag = Int(info?.magAngleChannelCount ?? 0) > 0 || state.magAngle.channelCount > 0
+        let perPage = AppModel.bioSlotCount - (hasECG ? 1 : 0) - (hasBRTH ? 1 : 0) - (hasMag ? 1 : 0)
         let reported = Int(info?.eegChannelCount ?? 0)
         let total = reported > 0 ? reported : state.eeg.channelCount
         guard perPage > 0, total > 0 else { return 1 }
@@ -1284,12 +1360,18 @@ final class AppModel: NSObject, ObservableObject {
             }()
             let version = controller.getVersion().replacingOccurrences(of: ".", with: "_")
             let path = dir.appendingPathComponent("sensorsdklog/\(stamp)_\(version)").path
-            _ = controller.setParam("LOG_PATH", value: path)
+            controller.setParam("LOG_PATH", value: path, completion: nil)
             storageText = "Logs & bins: \(path)"
         } else {
             storageText = ""
         }
-        _ = controller.setParam("DEBUG_ENABLED", value: debugLogEnabled ? "True" : "False")
+        controller.setParam("DEBUG_ENABLED", value: debugLogEnabled ? "True" : "False", completion: nil)
+    }
+
+    private func applyDongleDebug() {
+#if os(macOS)
+        controller.setParam("BLE_TRACE_ENABLED", value: dongleDebugEnabled ? "True" : "False", completion: nil)
+#endif
     }
 
     // MARK: bin replay / parse
@@ -1391,6 +1473,7 @@ final class AppModel: NSObject, ObservableObject {
         }
         var paths: [String] = []
         var macs: [String] = []
+        var sensors: [SensorProfile] = []
         var infos: [String: BinFileInfo] = [:]
         var names: [String: String] = [:]
         for url in urls {
@@ -1406,6 +1489,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             paths.append(path)
             macs.append(info.mac)
+            sensors.append(controller.requireSensor(info.mac))
             infos[info.mac] = info
             names[info.mac] = url.lastPathComponent
         }
@@ -1416,7 +1500,7 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         stopScanForReplay()
-        let results = controller.multiReplayBinFile(paths, deviceMacs: macs,
+        let results = controller.multiReplayBinFile(paths, sensors: sensors,
                                                     realtime: true, timeout: 5)
         replayStopRequested = false
         replayPaused = false
@@ -1528,8 +1612,7 @@ final class AppModel: NSObject, ObservableObject {
         analyzing = true
         if accessing { parseScopedUrls.append(url) }
         replayText = "Analyzing: \(url.lastPathComponent) ..."
-        DispatchQueue.global().async { [weak self] in
-            let result = self?.controller.parseBin(toCsv: binPath, csvPath: csvPath) ?? ""
+        controller.parseBin(toCsv: binPath, csvPath: csvPath) { [weak self] result, _ in
             self?.onMain {
                 guard let self = self else { return }
                 self.analyzing = false

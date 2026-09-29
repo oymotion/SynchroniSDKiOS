@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Bio page: 8 fixed slots; EMG/EEG channel rows, the EEG mode's ECG row
-/// and the PPG mode's EEG/PPG rows split into a left FFT spectrum half and
-/// a right time-domain waveform half.
+/// Bio page: 8 fixed slots; EMG/EEG channel rows, the mag-angle Angle row,
+/// the EEG mode's ECG row and the PPG mode's EEG/PPG rows split into a left
+/// FFT spectrum half and a right time-domain waveform half.
 struct BioPage: View {
     @EnvironmentObject var model: AppModel
 
@@ -73,12 +73,29 @@ struct BioPage: View {
         model.currentMac != nil ? "Waiting for data ..." : "Not connected"
     }
 
-    /// Impedance side text and color for one channel.
+    /// Impedance side text and color for one channel; blank while the device
+    /// has no impedance capability or the NTF_IMPEDANCE switch is off.
     private func impedanceSide(_ values: [Float], _ ch: Int) -> (String, Color) {
+        guard model.ntfStates["NTF_IMPEDANCE"] ?? false else { return ("", .secondary) }
         guard ch < values.count, values[ch] >= 0 else { return ("", .secondary) }
         let kOhm = values[ch] / 1000.0
         let color: Color = kOhm <= 500 ? .green : (kOhm <= 999 ? .orange : .red)
         return (String(format: "%.2f KOhm", kOhm), color)
+    }
+
+    /// Angle row: fixed 0-180 degree Y range, splits with a spectrum.
+    private func angleRow(widgetIndex i: Int) -> some View {
+        HStack(spacing: 8) {
+            SpectrumView(title: "", ring: model.deviceState.magAngle,
+                         state: model.deviceState, labels: ["Angle"],
+                         channel: 0, colorIndex: i, fillHeight: true)
+                .frame(maxWidth: .infinity)
+            WaveformView(title: "Angle", ring: model.deviceState.magAngle,
+                         channel: 0, fixedY: 0...180, colorIndex: i,
+                         placeholder: waitingText)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(minHeight: 90)
     }
 
     @ViewBuilder
@@ -87,7 +104,10 @@ struct BioPage: View {
         let reported = Int(model.deviceInfo?.emgChannelCount ?? 0)
         let observed = model.deviceState.emg.channelCount
         let channels = max(reported, observed)
-        ForEach(0..<(channels > 0 ? min(channels, 8) : 8), id: \.self) { ch in
+        let hasMag = Int(model.deviceInfo?.magAngleChannelCount ?? 0) > 0
+            || model.deviceState.magAngle.channelCount > 0
+        let emgRows = channels > 0 ? min(channels, 8 - (hasMag ? 1 : 0)) : (hasMag ? 0 : 8)
+        ForEach(0..<emgRows, id: \.self) { ch in
             let (text, color) = impedanceSide(imp, ch)
             // Left: channel FFT spectrum. Right: time-domain waveform.
             HStack(spacing: 8) {
@@ -102,6 +122,9 @@ struct BioPage: View {
             }
             .frame(minHeight: 90)
         }
+        if hasMag {
+            angleRow(widgetIndex: emgRows)
+        }
     }
 
     /// EEG mode plots.
@@ -112,7 +135,8 @@ struct BioPage: View {
         let imp = state.impedance(for: .NTF_EEG)
         let hasECG = Int(info?.ecgChannelCount ?? 0) > 0 || state.ecg.channelCount > 0
         let hasBRTH = Int(info?.brthChannelCount ?? 0) > 0 || state.brth.channelCount > 0
-        let perPage = AppModel.bioSlotCount - (hasECG ? 1 : 0) - (hasBRTH ? 1 : 0)
+        let hasMag = Int(info?.magAngleChannelCount ?? 0) > 0 || state.magAngle.channelCount > 0
+        let perPage = AppModel.bioSlotCount - (hasECG ? 1 : 0) - (hasBRTH ? 1 : 0) - (hasMag ? 1 : 0)
         let reported = Int(info?.eegChannelCount ?? 0)
         let total = reported > 0 ? reported : state.eeg.channelCount
         let pages = perPage > 0 && total > 0 ? max(1, (total + perPage - 1) / perPage) : 1
@@ -120,6 +144,7 @@ struct BioPage: View {
         let startCh = page * perPage
         let ecgIndex = AppModel.bioSlotCount - 1 - (hasBRTH ? 1 : 0)
         let brthIndex = AppModel.bioSlotCount - 1
+        let magIndex = ecgIndex - (hasECG ? 1 : 0)
         ForEach(0..<AppModel.bioSlotCount, id: \.self) { i in
             let ch = startCh + i
             if i < perPage && ch < total {
@@ -152,6 +177,8 @@ struct BioPage: View {
                 WaveformView(title: "BRTH", ring: state.brth, channel: 0,
                              colorIndex: 3, placeholder: waitingText)
                     .frame(minHeight: 90)
+            } else if hasMag && i == magIndex {
+                angleRow(widgetIndex: i)
             } else {
                 // Blank slot.
                 let noSuchChannel = i < perPage && ch >= total
