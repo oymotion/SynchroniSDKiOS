@@ -121,14 +121,16 @@ profile.delegate = self   // SensorProfileDelegate
 // - onPowerChanged(_:power:)         — battery pushes (optional)
 // - onDeviceInfoUpdate(_:info:)      — DeviceInfo changed in place (optional)
 // - onDataTransferStateChange(_:isTransferring:) — stream on/off (optional)
-// - onAutoReconnect(_:hasLastSession:) -> Bool   — gate/customize session
+// - onAutoReconnect(_:hasLastSession:answer:)    — gate/customize session
 //                                       recovery (optional)
 ```
 
 Callback threading model: delegate calls and completion blocks fire on
-internal SDK threads — hop to the main queue for UI work. The one exception is
-`onAutoReconnect`, which must answer synchronously on an SDK thread (return
-immediately, never call blocking SDK methods from it).
+internal SDK threads — hop to the main queue for UI work. `onAutoReconnect`
+answers asynchronously: invoke the passed `answer` block exactly once
+(`answer(true)` = the app takes over recovery, `answer(false)` = SDK default
+recovery), from any thread, at any later time; no answer within ~10 s falls
+back to the SDK default recovery.
 
 ### 8. Connect / disconnect
 
@@ -162,8 +164,8 @@ profile.hasInited
 ### 11. Data notification
 
 ```swift
-profile.startDataNotification(timeout: 5.0) { success, err in ... }
-profile.stopDataNotification(timeout: 5.0) { success, err in ... }
+profile.startDataNotification(5.0) { success, err in ... }
+profile.stopDataNotification(5.0) { success, err in ... }
 profile.isDataTransfering
 ```
 
@@ -171,7 +173,7 @@ profile.isDataTransfering
 
 ```swift
 let info = profile.deviceInfo   // cached during init / fetchDeviceInfo, no GATT traffic
-profile.fetchDeviceInfo(timeout: 5.0) { info, err in ... }
+profile.fetchDeviceInfo(5.0) { info, err in ... }
 ```
 
 `DeviceInfo` carries the device name / model / hardware / firmware versions,
@@ -185,7 +187,7 @@ device-reported max sample rates (`EmgMaxSampleRate` / `EegMaxSampleRate` /
 ### 13. Battery level
 
 ```swift
-profile.getBatteryLevel(timeout: 5.0) { battery, err in ... }
+profile.getBatteryLevel(5.0) { battery, err in ... }
 // battery: 0...100; a fresh GATT query every time (may report failure)
 ```
 
@@ -197,9 +199,9 @@ profile.setAutoReconnect(true)   // default on
 
 While enabled and the device is streaming, an abnormal disconnect is followed
 by automatic reconnect -> `init` with the previous arguments -> re-applying
-the previous session's `setParam` values -> `startDataNotification`. Return
-`true` from `onAutoReconnect(_:hasLastSession:)` to take over recovery
-yourself.
+the previous session's `setParam` values -> `startDataNotification`. Call
+`answer(true)` from `onAutoReconnect(_:hasLastSession:answer:)` to take over
+recovery yourself.
 
 ### 15. Reading data
 
@@ -252,7 +254,7 @@ func onData(_ profile: SensorProfile, dataList: [SensorData]) {
 ### 16. setParam
 
 ```swift
-profile.setParam(timeout: 5.0, key: "NTF_EEG", value: "ON") { result, err in ... }
+profile.setParam(5.0, key: "NTF_EEG", value: "ON") { result, err in ... }
 ```
 
 Available keys (value `"ON"` / `"OFF"` unless noted):
@@ -261,9 +263,9 @@ Available keys (value `"ON"` / `"OFF"` unless noted):
 // Data stream toggles
 "NTF_EEG" "NTF_ECG" "NTF_EMG" "NTF_GEST" "NTF_BRTH" "NTF_IMU"
 "NTF_IMPEDANCE" "NTF_MAG_ANGLE" "NTF_PPG" "NTF_PPG_RAW" (alias of NTF_PPG)
-"NTF_SPO2" "NTF_GFORCE_ACC" "NTF_GFORCE_GYRO" "NTF_GFORCE_EULER" "NTF_GFORCE_QUAT"
-// NTF_IMU is the master switch of the four NTF_GFORCE_* streams; on legacy
-// EMG devices NTF_GEST and NTF_EMG are mutually exclusive.
+"NTF_SPO2"
+// NTF_IMU alone switches the legacy ACC/GYRO/EULER/QUAT split streams; on
+// legacy EMG devices NTF_GEST and NTF_EMG are mutually exclusive.
 
 // Firmware filters
 "FILTER_50HZ" "FILTER_60HZ" "FILTER_HPF" "FILTER_LPF"
@@ -286,7 +288,7 @@ new setting takes effect immediately; `FILTER_*` applies on the fly.
 ### 17. getParam
 
 ```swift
-profile.getParam(timeout: 5.0, key: "NTF") { result, err in ... }
+profile.getParam(5.0, key: "NTF") { result, err in ... }
 // "NTF"    -> "NTF_BRTH|ON|NTF_ECG|ON|..." (aggregate of all known keys)
 // "FILTER" -> "FILTER_50HZ|ON|FILTER_60HZ|ON|..."
 // "EEG_SAMPLE_RATE"      -> current rate, e.g. "250"
@@ -312,20 +314,31 @@ let replay = controller.replayBinFile(path, deviceMac: info.mac,
                                       realtime: true, timeout: 60)
 controller.pauseBinReplay(info.mac)     // "OK" or "Error: ..."
 controller.resumeBinReplay(info.mac)
-controller.stopBinReplay(info.mac)      // joins the replay thread — call off
-                                        // the main thread
+controller.stopBinReplay(info.mac)      // "OK" or "Error: ..." (non-blocking)
 
-// Offline full-speed conversion to CSV (blocks the caller):
-let csv = controller.parseBinToCsv(binPath, csvPath: csvPath)
+// Offline full-speed conversion to CSV (completion-block async; the result is
+// the CSV path or an "Error: ..." string):
+controller.parseBin(toCsv: binPath, csvPath: csvPath) { result, err in ... }
 ```
 
 ## Logging controls
 
+File logging is driven by the controller-level getParam/setParam pair
+(completion-block async like every other controller operation; a nil
+completion = fire-and-forget):
+
 ```swift
-controller.setDebugEnabled(true)            // master switch for file output
-controller.setLogPath(true, path: dir)      // log directory (created if missing);
-                                            // setLogPath(false) disables file output
+controller.setParam("LOG_PATH", value: dir) { result, err in ... }
+controller.setParam("DEBUG_ENABLED", value: "True") { result, err in ... }
 ```
+
+- `"LOG_PATH"` — log directory (created if missing); `"True"` selects the
+  default directory, `"False"` / `""` turns file output off.
+- `"DEBUG_ENABLED"` — master switch for file output (`"True"` / `"False"`).
+- `"DATA_LOG_ENABLED"` — bin data capture switch (`"True"` / `"False"`).
+
+Set `LOG_PATH` before `DEBUG_ENABLED` so the whole session lands in one
+directory. Reads go through `controller.getParam(key) { result, err in ... }`.
 
 The controller log (`sensor_controller_log_YYYYMMDD_HHMMSS.txt`) holds the
 common logs; per-profile logs are enabled via `setParam("DEBUG_LOG_PATH", ...)`.
