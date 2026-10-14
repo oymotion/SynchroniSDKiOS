@@ -128,6 +128,8 @@ struct DevicePage: View {
                 Toggle("Enable debug dongle", isOn: $model.dongleDebugEnabled)
                     .disabled(model.replaying)
 #endif
+                Toggle("Translate IMU (split ACC/GYRO/EULER/QUAT)", isOn: $model.translateImu)
+                    .disabled(model.replaying)
                 if !model.storageText.isEmpty {
                     Text(model.storageText)
                         .font(.caption2)

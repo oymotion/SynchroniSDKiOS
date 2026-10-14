@@ -115,7 +115,7 @@ final class AppModel: NSObject, ObservableObject {
     var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.36"
+    static let demoVersion = "0.1.39"
     /// SDK version string, captured at startup.
     let sdkVersion: String
     /// Active BLE backend name, re-read on the 1 Hz tick.
@@ -151,8 +151,8 @@ final class AppModel: NSObject, ObservableObject {
             contextsLock.lock()
             let all = contexts.values
             contextsLock.unlock()
-            for ctx in all { ctx.profile.setAutoReconnect(autoReconnect) }
-            for (_, p) in replayProfiles { p.setAutoReconnect(autoReconnect) }
+            for ctx in all { ctx.profile.autoReconnect = autoReconnect }
+            for (_, p) in replayProfiles { p.autoReconnect = autoReconnect }
         }
     }
     @Published var cloneData = false {
@@ -193,6 +193,17 @@ final class AppModel: NSObject, ObservableObject {
         didSet {
             appLog("User: dongle debug \(dongleDebugEnabled ? "ON" : "OFF")")
             applyDongleDebug()
+        }
+    }
+    /// "Translate IMU" toggle: the IMU data arrives as the split
+    /// ACC/GYRO/EULER/QUAT streams instead of the aggregate stream.
+    @Published var translateImu = true {
+        didSet {
+            let value = translateImu ? "True" : "False"
+            appLog("User: translate IMU \(value)")
+            controller.setParam("TRANSLATE_IMU", value: value) { [weak self] result, _ in
+                self?.appLog("App: setParam(TRANSLATE_IMU, \(value)) -> \(result)")
+            }
         }
     }
     /// "Check Dongle" in-flight flag and result dialog text. macOS only.
@@ -606,7 +617,7 @@ final class AppModel: NSObject, ObservableObject {
         appLog("User: connect \(name) (\(mac))")
         let p = controller.requireSensor(mac)
         p.delegate = self
-        p.setAutoReconnect(autoReconnect)
+        p.autoReconnect = autoReconnect
         let ctx: DeviceContext
         if let kept = context(for: mac), !kept.isReplay, kept.profile === p {
             ctx = kept
