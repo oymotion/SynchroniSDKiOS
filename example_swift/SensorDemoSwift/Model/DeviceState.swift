@@ -128,6 +128,7 @@ final class DeviceState {
     let magAngle = RingBuffer()
     let ppg = RingBuffer()
     let spo2 = RingBuffer()
+    let relax = RingBuffer()
 
     private(set) var bioMode: BioMode = .none
     private(set) var gesture = GestureRecord()
@@ -138,6 +139,21 @@ final class DeviceState {
     let liveFilter = LiveFilter()
     /// Bumped by every reset().
     private var epoch = 0
+
+    // Algo relax pipeline.
+    private let algoLock = NSLock()
+    private var algoInstance: SensorAlgo?
+    private var algoCsv: FileHandle?
+    private var algoCsvPath: String?
+    private(set) var algoCloneMode = false
+    private(set) var lastRelaxStep: UInt64 = 0
+    private(set) var lastRelaxTimestamp: Double = -1
+    private(set) var algoResetGeneration: UInt64 = 0
+    private var algoFeedTypes: Set<Int> = []
+
+    init() {
+        recreateAlgo(cloneMode: false)
+    }
 
     // counters
     private(set) var batchCount = 0
@@ -197,7 +213,7 @@ final class DeviceState {
         epoch += 1
         lock.unlock()
         liveFilter.reset()
-        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2] {
+        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2, relax] {
             ring.reset()
         }
     }
@@ -205,7 +221,7 @@ final class DeviceState {
     /// Zeroes every ring's content and drops the impedance / gesture
     /// readouts.
     func clearBuffers() {
-        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2] {
+        for ring in [acc, gyro, euler, quat, emg, eeg, ecg, brth, magAngle, ppg, spo2, relax] {
             ring.clear()
         }
         lock.lock()
@@ -218,6 +234,140 @@ final class DeviceState {
         lock.lock()
         defer { lock.unlock() }
         return epoch
+    }
+
+    // MARK: - algo (SensorAlgo relax pipeline)
+
+    /// Current algo controller.
+    func currentAlgo() -> SensorAlgo? {
+        algoLock.lock()
+        defer { algoLock.unlock() }
+        return algoInstance
+    }
+
+    func currentAlgoResetGeneration() -> UInt64 {
+        algoLock.lock()
+        defer { algoLock.unlock() }
+        return algoResetGeneration
+    }
+
+    /// First-feed log gate per data type.
+    func noteAlgoFeedType(_ type: Int) -> Bool {
+        algoLock.lock()
+        defer { algoLock.unlock() }
+        return algoFeedTypes.insert(type).inserted
+    }
+
+    /// Recreates the algo controller with the given storage mode.
+    func recreateAlgo(cloneMode: Bool) {
+        algoLock.lock()
+        algoCloneMode = cloneMode
+        algoResetGeneration &+= 1
+        lastRelaxStep = 0
+        lastRelaxTimestamp = -1
+        algoLock.unlock()
+        relax.clear()
+        let algo = SensorAlgo()
+        algo.initWithCompletion(nil)
+        algo.setParam("CLONE", value: cloneMode ? "True" : "False", completion: nil)
+        algo.setParam("EEG_REFRESH_RATE", value: "1", completion: nil)
+        algoLock.lock()
+        algoInstance = algo
+        algoLock.unlock()
+    }
+
+    /// Clears the relax ring and restarts the algo state.
+    func resetAlgo() {
+        algoLock.lock()
+        algoResetGeneration &+= 1
+        lastRelaxStep = 0
+        lastRelaxTimestamp = -1
+        let algo = algoInstance
+        algoLock.unlock()
+        relax.clear()
+        algo?.reset()
+    }
+
+    /// Opens the relax CSV next to the device log file.
+    func openAlgoCsv(deviceLogPath: String) {
+        guard !deviceLogPath.isEmpty, !deviceLogPath.hasPrefix("Error"),
+              deviceLogPath != "True", deviceLogPath != "False" else { return }
+        let logUrl = URL(fileURLWithPath: deviceLogPath)
+        let base = logUrl.deletingPathExtension().lastPathComponent
+        guard !base.isEmpty else { return }
+        let csvUrl = logUrl.deletingLastPathComponent().appendingPathComponent(base + ".csv")
+        algoLock.lock()
+        defer { algoLock.unlock() }
+        if algoCsvPath == csvUrl.path, algoCsv != nil { return }
+        algoCsv?.closeFile()
+        algoCsv = nil
+        algoCsvPath = csvUrl.path
+        FileManager.default.createFile(atPath: csvUrl.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: csvUrl) else { return }
+        algoCsv = handle
+        if let header = "STEP,TIMESTAMP,VALID,RELAX,CONCENTRATE,POSITION\n".data(using: .utf8) {
+            handle.write(header)
+        }
+    }
+
+    func closeAlgoCsv() {
+        algoLock.lock()
+        algoCsv?.closeFile()
+        algoCsv = nil
+        algoCsvPath = nil
+        algoLock.unlock()
+    }
+
+    /// Appends one NO_HEADER result row to the relax ring and the CSV.
+    func appendRelaxRow(_ row: String) {
+        let fields = row.split(separator: "|").map(String.init)
+        guard fields.count == 6,
+              let step = UInt64(fields[0]),
+              let timestamp = Double(fields[1]),
+              let relaxValue = Float(fields[3]) else { return }
+        algoLock.lock()
+        let lastStep = lastRelaxStep
+        algoLock.unlock()
+        guard step != lastStep else { return }
+        algoLock.lock()
+        if step < lastRelaxStep {
+            relax.clear()
+            lastRelaxTimestamp = -1
+        }
+        let lastTs = lastRelaxTimestamp
+        algoLock.unlock()
+        if step > 0 {
+            relax.ensure(channels: 1, capacity: 250, rate: 50)
+            var slotCount = 1
+            if timestamp > 0 && lastTs > 0 {
+                let dt = timestamp - lastTs
+                if dt > 0 {
+                    slotCount = min(max(1, Int((dt * 50).rounded())), 250)
+                }
+            }
+            if timestamp > 0 {
+                algoLock.lock()
+                lastRelaxTimestamp = timestamp
+                algoLock.unlock()
+            }
+            if slotCount > 1 {
+                let previous = relax.latest(0)
+                for _ in 0..<(slotCount - 1) {
+                    relax.appendColumn([previous])
+                }
+            }
+            relax.appendColumn([relaxValue])
+        }
+        algoLock.lock()
+        lastRelaxStep = step
+        if step > 0, let csv = algoCsv {
+            var csvFields = fields
+            csvFields[1] = String(format: "%.3f", timestamp)
+            if let line = (csvFields.joined(separator: ",") + "\n").data(using: .utf8) {
+                csv.write(line)
+            }
+        }
+        algoLock.unlock()
     }
 
     /// Seeds the bio mode from DeviceInfo (PPG > EEG > EMG/MAG).

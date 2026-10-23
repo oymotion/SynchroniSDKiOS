@@ -21,15 +21,15 @@ struct DevicePage: View {
                 HStack {
                     Button(model.streamingMacs.isEmpty ? "Multi Start" : "Multi Stop") {
                         if model.streamingMacs.isEmpty {
-                            model.multiStart()
+                            Task { await model.multiStart() }
                         } else {
-                            model.multiStop()
+                            Task { await model.multiStop() }
                         }
                     }
                     .disabled(model.connectedMacs.isEmpty || model.replaying)
 #if os(macOS)
                     Button(model.checkingDongle ? "Checking Dongle..." : "Check Dongle") {
-                        model.checkDongle()
+                        Task { await model.checkDongle() }
                     }
                     .disabled(model.checkingDongle || model.replaying)
 #endif
@@ -55,13 +55,13 @@ struct DevicePage: View {
                                 Text(model.stateText(for: d.mac))
                                     .foregroundStyle(.secondary)
                                 Button("Disconnect") {
-                                    model.toggleConnect(mac: d.mac)
+                                    Task { await model.toggleConnect(mac: d.mac) }
                                 }
                                 .buttonStyle(.bordered)
                                 .disabled(model.disconnectingMacs.contains(d.mac))
                             } else {
                                 Button("Connect") {
-                                    model.toggleConnect(mac: d.mac)
+                                    Task { await model.toggleConnect(mac: d.mac) }
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -96,7 +96,7 @@ struct DevicePage: View {
             }
 
             Section("Status") {
-                Text("SensorSDK \(model.sdkVersion) | Backend: \(model.backendName), demo v\(AppModel.demoVersion)")
+                Text("SensorSDK \(model.sdkVersion) | Algo: \(model.algoVersion) | Backend: \(model.backendName), demo v\(AppModel.demoVersion)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(model.statusText)
@@ -140,18 +140,14 @@ struct DevicePage: View {
 
             Section("Data Notification") {
                 ForEach(AppModel.ntfKeys.filter { model.isParamVisible($0) }, id: \.self) { key in
-                    Toggle(AppModel.ntfLabels[key] ?? key, isOn: Binding(
-                        get: { model.ntfStates[key] ?? false },
-                        set: { model.setParamToggle(key: key, on: $0) }))
+                    Toggle(AppModel.ntfLabels[key] ?? key, isOn: paramBinding(key, states: model.ntfStates))
                         .disabled(!model.controlsEnabled)
                 }
             }
 
             Section("Filters") {
                 ForEach(AppModel.filterKeys.filter { model.isParamVisible($0) }, id: \.self) { key in
-                    Toggle(AppModel.filterLabels[key] ?? key, isOn: Binding(
-                        get: { model.filterStates[key] ?? false },
-                        set: { model.setParamToggle(key: key, on: $0) }))
+                    Toggle(AppModel.filterLabels[key] ?? key, isOn: paramBinding(key, states: model.filterStates))
                         .disabled(!model.controlsEnabled || model.filterSupported == nil)
                 }
             }
@@ -162,7 +158,7 @@ struct DevicePage: View {
                         ForEach(AppModel.sampleRateCandidates.filter { model.isSampleRateVisible($0) },
                                 id: \.self) { rate in
                             rateButton(rate, current: model.eegSampleRate) {
-                                model.setEegSampleRate(rate)
+                                Task { await model.setEegSampleRate(rate) }
                             }
                         }
                     }
@@ -175,7 +171,7 @@ struct DevicePage: View {
                         ForEach(AppModel.emgSampleRateCandidates.filter { model.isEmgSampleRateVisible($0) },
                                 id: \.self) { rate in
                             rateButton(rate, current: model.emgSampleRate) {
-                                model.setEmgSampleRate(rate)
+                                Task { await model.setEmgSampleRate(rate) }
                             }
                         }
                     }
@@ -188,7 +184,7 @@ struct DevicePage: View {
                         ForEach(AppModel.imuSampleRateCandidates.filter { model.isImuSampleRateVisible($0) },
                                 id: \.self) { rate in
                             rateButton(rate, current: model.imuSampleRate) {
-                                model.setImuSampleRate(rate)
+                                Task { await model.setImuSampleRate(rate) }
                             }
                         }
                     }
@@ -201,7 +197,7 @@ struct DevicePage: View {
                         ForEach(AppModel.ppgSampleRateCandidates.filter { model.isPpgSampleRateVisible($0) },
                                 id: \.self) { rate in
                             rateButton(rate, current: model.ppgSampleRate) {
-                                model.setPpgSampleRate(rate)
+                                Task { await model.setPpgSampleRate(rate) }
                             }
                         }
                     }
@@ -258,7 +254,7 @@ struct DevicePage: View {
             guard case .success(let urls) = result else { return }
             if parseInsteadOfReplay {
                 if let url = urls.first {
-                    model.parseBinToCsv(url: url)
+                    Task { await model.parseBinToCsv(url: url) }
                 }
             } else if multiReplayPicker {
                 model.replayBinGroup(urls: urls)
@@ -266,6 +262,13 @@ struct DevicePage: View {
                 model.replayBin(url: url)
             }
         }
+    }
+
+    /// One NTF/FILTER toggle binding: the set side applies via the async chain.
+    private func paramBinding(_ key: String, states: [String: Bool]) -> Binding<Bool> {
+        Binding(
+            get: { states[key] ?? false },
+            set: { on in Task { await model.setParamToggle(key: key, on: on) } })
     }
 
     /// One sample-rate radio.

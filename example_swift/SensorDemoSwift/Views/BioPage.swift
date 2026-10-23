@@ -189,20 +189,23 @@ struct BioPage: View {
         }
     }
 
-    /// PPG mode plots.
+    /// PPG mode plots: RELAX first, then EEG fp1/fp2 + PPG red/ir + SpO2.
     @ViewBuilder
     private var ppgPlots: some View {
         let imp = model.deviceState.impedance(for: .NTF_EEG)
         let fp1 = impedanceSide(imp, 0)
         let fp2 = impedanceSide(imp, 1)
+        WaveformView(title: "RELAX", ring: model.deviceState.relax, channel: 0,
+                     colorIndex: 0, placeholder: waitingText)
+            .frame(minHeight: 90)
         // Left: channel FFT spectrum. Right: time-domain waveform.
         HStack(spacing: 8) {
             SpectrumView(title: "", ring: model.deviceState.eeg,
                          state: model.deviceState, labels: ["fp1"],
-                         channel: 0, colorIndex: 0, fillHeight: true)
+                         channel: 0, colorIndex: 1, fillHeight: true)
                 .frame(maxWidth: .infinity)
             WaveformView(title: "EEG fp1", ring: model.deviceState.eeg, channel: 0,
-                         colorIndex: 0, sideText: fp1.0, sideColor: fp1.1,
+                         colorIndex: 1, sideText: fp1.0, sideColor: fp1.1,
                          placeholder: waitingText)
                 .frame(maxWidth: .infinity)
         }
@@ -210,10 +213,10 @@ struct BioPage: View {
         HStack(spacing: 8) {
             SpectrumView(title: "", ring: model.deviceState.eeg,
                          state: model.deviceState, labels: ["fp2"],
-                         channel: 1, colorIndex: 1, fillHeight: true)
+                         channel: 1, colorIndex: 2, fillHeight: true)
                 .frame(maxWidth: .infinity)
             WaveformView(title: "EEG fp2", ring: model.deviceState.eeg, channel: 1,
-                         colorIndex: 1, sideText: fp2.0, sideColor: fp2.1,
+                         colorIndex: 2, sideText: fp2.0, sideColor: fp2.1,
                          placeholder: waitingText)
                 .frame(maxWidth: .infinity)
         }
@@ -221,28 +224,28 @@ struct BioPage: View {
         HStack(spacing: 8) {
             SpectrumView(title: "", ring: model.deviceState.ppg,
                          state: model.deviceState, labels: ["red_led"],
-                         channel: 0, colorIndex: 2, fillHeight: true)
+                         channel: 0, colorIndex: 3, fillHeight: true)
                 .frame(maxWidth: .infinity)
             WaveformView(title: "PPG red_led", ring: model.deviceState.ppg, channel: 0,
-                         colorIndex: 2, placeholder: waitingText)
+                         colorIndex: 3, placeholder: waitingText)
                 .frame(maxWidth: .infinity)
         }
         .frame(minHeight: 90)
         HStack(spacing: 8) {
             SpectrumView(title: "", ring: model.deviceState.ppg,
                          state: model.deviceState, labels: ["ir_led"],
-                         channel: 1, colorIndex: 3, fillHeight: true)
+                         channel: 1, colorIndex: 4, fillHeight: true)
                 .frame(maxWidth: .infinity)
             WaveformView(title: "PPG ir_led", ring: model.deviceState.ppg, channel: 1,
-                         colorIndex: 3, placeholder: waitingText)
+                         colorIndex: 4, placeholder: waitingText)
                 .frame(maxWidth: .infinity)
         }
         .frame(minHeight: 90)
         WaveformView(title: "SpO2 spo2", ring: model.deviceState.spo2, channel: 0,
-                     colorIndex: 4, placeholder: waitingText)
+                     colorIndex: 5, placeholder: waitingText)
             .frame(minHeight: 90)
         WaveformView(title: "SpO2 heart_rate", ring: model.deviceState.spo2, channel: 1,
-                     colorIndex: 5, placeholder: waitingText)
+                     colorIndex: 6, placeholder: waitingText)
             .frame(minHeight: 90)
     }
 }

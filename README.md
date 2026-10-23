@@ -30,8 +30,8 @@ import sensor          // Swift
 ```
 
 All public types (`SensorController` / `SensorProfile` / `SensorData` /
-`Sample` / `DeviceInfo` / `BLEDevice` / `BinFileInfo`) come from the framework
-itself.
+`Sample` / `DeviceInfo` / `BLEDevice` / `BinFileInfo` / `SensorAlgo`) come
+from the framework itself.
 
 ## 1. Permission
 
@@ -298,6 +298,44 @@ profile.getParam(5.0, key: "NTF") { result, err in ... }
 
 If the key is not supported, the result starts with `"Error"`.
 
+## Streaming algorithms (SensorAlgo)
+
+`SensorAlgo` runs the streaming DSP algorithms on live data (EEG relax via
+the theta/beta ratio; PPG heart rate / SpO2). One instance per device;
+multiple instances are independent. All operations are completion-block
+async like the rest of the wrapper (nil completion = fire-and-forget), and
+callbacks fire on the instance's internal worker thread.
+
+```swift
+let algo = SensorAlgo()        // raises when the library is too old
+algo.initWithCompletion { ok, err in ... }
+algo.hasInit                   // synchronous probe
+
+algo.pushSamples(dataList, param: "") { ok, err in ... }
+// Feed the onData batches directly. Consumed: NTF_EEG (>= 2 channels),
+// NTF_PPG (>= 2 channels), aggregate NTF_IMU (>= 6 channels); other types
+// are ignored, and IMU is optional (it only drives motion rejection).
+// Borrowed batches pass param "" and must stay within their borrow
+// lifetime; pass "CLONE" (or set the CLONE param to "True") to have the
+// SDK deep-copy every batch at call time.
+
+algo.getResult("NO_HEADER") { result, err in ... }
+// "STEP|TIMESTAMP|VALID|RELAX|CONCENTRATE|POSITION" — one snapshot per
+// call from a bounded FIFO (falls back to the latest once drained).
+// RELAX is the valid-gated EEG theta/beta ratio (-1 while invalid);
+// TIMESTAMP is the consumed stream's absolute end time in seconds;
+// CONCENTRATE/POSITION are stubs. "EEG" / "PPG" answer NAME|value
+// aggregates, "HEADER_ONLY" the field names, a bare field name its value.
+
+algo.setParam("EEG_REFRESH_RATE", value: "1") { result, err in ... }
+// Result cadence: 0 (default) = one snapshot per pushed update; R > 0 =
+// one snapshot per 1/R second of consumed EEG/PPG samples.
+// Other params: "EEG_SAMPLE_RATE" (250/500/1000), "PPG_SAMPLE_RATE" (100),
+// "IMU_SAMPLE_RATE" (any positive), the "*_SAMPLE_RATE_LIST" readbacks,
+// "CLONE". algo.reset() re-creates the algorithms with fresh state.
+algo.algoCapiVersion()         // library's algo C API version
+```
+
 ## Bin file recording and replay
 
 The SDK records the raw BLE packets of every session into a `.bin` capture
@@ -358,7 +396,8 @@ profile.log("User toggled filter 50Hz")     // routed to the profile's log
 
 `example_swift/` contains **SensorDemoSwift**, a full SwiftUI demo (one target
 for macOS + iPhone/iPad): multi-device scan/connect/stream, bio waveforms with
-live band-pass filter, IMU waveforms + FFT spectra + 3D quaternion cube,
+live band-pass filter (PPG devices additionally get a RELAX relaxation plot
+driven by `SensorAlgo`), IMU waveforms + FFT spectra + 3D quaternion cube,
 NTF/FILTER/sample-rate controls, battery, auto reconnect, bin replay and
 parse-to-CSV.
 

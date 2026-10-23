@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 #if os(macOS)
 import AppKit
 #else
@@ -115,9 +116,11 @@ final class AppModel: NSObject, ObservableObject {
     var replaying: Bool { !replayMacs.isEmpty }
 
     /// The demo's own version. Shown on the Device page.
-    static let demoVersion = "0.1.39"
+    static let demoVersion = "0.1.47"
     /// SDK version string, captured at startup.
     let sdkVersion: String
+    /// Algo C API version, captured at startup.
+    let algoVersion: UInt32
     /// Active BLE backend name, re-read on the 1 Hz tick.
     @Published private(set) var backendName = ""
 
@@ -160,12 +163,22 @@ final class AppModel: NSObject, ObservableObject {
             dataModeLock.lock()
             cloneDataMode = cloneData
             dataModeLock.unlock()
+            contextsLock.lock()
+            let all = contexts.values
+            contextsLock.unlock()
+            for ctx in all { ctx.state.recreateAlgo(cloneMode: cloneData) }
         }
     }
     @Published var debugLogEnabled = true {
         didSet {
             appLog("User: SDK debug log \(debugLogEnabled ? "ON" : "OFF")")
             applyDebugLog()
+            if !debugLogEnabled {
+                contextsLock.lock()
+                let all = contexts.values
+                contextsLock.unlock()
+                for ctx in all { ctx.state.closeAlgoCsv() }
+            }
             let value = debugLogEnabled ? "True" : "False"
             contextsLock.lock()
             let all = contexts.values
@@ -197,12 +210,17 @@ final class AppModel: NSObject, ObservableObject {
     }
     /// "Translate IMU" toggle: the IMU data arrives as the split
     /// ACC/GYRO/EULER/QUAT streams instead of the aggregate stream.
-    @Published var translateImu = true {
+    @Published var translateImu = false {
         didSet {
             let value = translateImu ? "True" : "False"
             appLog("User: translate IMU \(value)")
-            controller.setParam("TRANSLATE_IMU", value: value) { [weak self] result, _ in
-                self?.appLog("App: setParam(TRANSLATE_IMU, \(value)) -> \(result)")
+            Task { @MainActor in
+                do {
+                    let result = try await self.controller.setParam("TRANSLATE_IMU", value: value)
+                    self.appLog("App: setParam(TRANSLATE_IMU, \(value)) -> \(result)")
+                } catch {
+                    self.appLog("App: setParam(TRANSLATE_IMU, \(value)) failed: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -280,10 +298,13 @@ final class AppModel: NSObject, ObservableObject {
     /// Data pipeline queue: batches paired with the target device's stream
     /// state.
     private let dataQueueLock = NSCondition()
-    private var dataQueue: [(state: DeviceState, batch: SensorData)] = []
+    private var dataQueue: [(state: DeviceState, batch: SensorData, cloned: Bool)] = []
     private var dataWorkerStop = false
     private var dataWorker: Thread?
     private var uiTimer: Timer?
+    /// Relax poll: one getResult chain in flight at a time.
+    private var relaxQueryPending = false
+    private var cancellables = Set<AnyCancellable>()
     private var terminateObserver: NSObjectProtocol?
     #if os(macOS)
     private var windowCloseObserver: NSObjectProtocol?
@@ -367,10 +388,12 @@ final class AppModel: NSObject, ObservableObject {
 
     override init() {
         sdkVersion = SensorController.getInstance().getVersion()
+        algoVersion = SensorAlgo.algoCapiVersion()
         super.init()
         controller.delegate = self
         applyDebugLog()
         applyDongleDebug()
+        Task { _ = try? await controller.setParam("TRANSLATE_IMU", value: translateImu ? "True" : "False") }
         statusText = "SensorSDK \(sdkVersion) \u{2014} Press Start Scan"
         let worker = Thread { [weak self] in self?.drainDataQueue() }
         worker.name = "SensorDataDrain"
@@ -379,6 +402,9 @@ final class AppModel: NSObject, ObservableObject {
         uiTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             self?.refreshDerived()
         }
+        plotTicker.$tick
+            .sink { [weak self] _ in self?.refreshRelax() }
+            .store(in: &cancellables)
         #if os(macOS)
         let terminateNotification = NSApplication.willTerminateNotification
         windowCloseObserver = NotificationCenter.default.addObserver(
@@ -425,9 +451,11 @@ final class AppModel: NSObject, ObservableObject {
         // termination runloop spin takes an empty path instead of touching
         // a dead profile.
         contextsLock.lock()
+        let closingContexts = Array(contexts.values)
         contexts.removeAll()
         contextOrder.removeAll()
         contextsLock.unlock()
+        for ctx in closingContexts { ctx.state.closeAlgoCsv() }
         replayProfiles.removeAll()
         replayMacs.removeAll()
         replayNames.removeAll()
@@ -491,9 +519,9 @@ final class AppModel: NSObject, ObservableObject {
             statusText = state.buildStatusText(head: head)
         }
         rateText = state.buildRateText()
-        controller.getParam("BACK_END") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self, self.backendName != result else { return }
+        Task { @MainActor in
+            let result = try? await self.controller.getParam("BACK_END")
+            if let result = result, self.backendName != result {
                 self.backendName = result
             }
         }
@@ -502,19 +530,19 @@ final class AppModel: NSObject, ObservableObject {
     // MARK: data pipeline
 
     /// Enqueues one batch with its target device's stream state.
-    private func enqueueData(_ state: DeviceState, _ batch: SensorData) {
+    private func enqueueData(_ state: DeviceState, _ batch: SensorData, cloned: Bool) {
         dataQueueLock.lock()
         while dataQueue.count >= 1000 {
             dataQueue.removeFirst()
         }
-        dataQueue.append((state, batch))
+        dataQueue.append((state, batch, cloned))
         dataQueueLock.signal()
         dataQueueLock.unlock()
     }
 
     /// Drains the data queue.
     private func drainDataQueue() {
-        var pending: [(state: DeviceState, batch: SensorData)] = []
+        var pending: [(state: DeviceState, batch: SensorData, cloned: Bool)] = []
         while true {
             dataQueueLock.lock()
             while !dataWorkerStop && dataQueue.isEmpty {
@@ -529,8 +557,59 @@ final class AppModel: NSObject, ObservableObject {
             dataQueueLock.unlock()
             for item in pending {
                 item.state.append([item.batch])
+                feedAlgo(item.state, batch: item.batch, cloned: item.cloned)
             }
             pending.removeAll(keepingCapacity: true)
+        }
+    }
+
+    // MARK: algo relax feed / poll
+
+    /// Forwards one algo-eligible batch (EEG / IMU aggregate) to the device's
+    /// SensorAlgo.
+    private func feedAlgo(_ state: DeviceState, batch: SensorData, cloned: Bool) {
+        let type = batch.dataType
+        guard type == .NTF_EEG || type == .NTF_IMU else { return }
+        guard let algo = state.currentAlgo() else { return }
+        if state.noteAlgoFeedType(Int(type.rawValue)) {
+            appLog("App: algo feed type \(Int(type.rawValue))", level: "D")
+        }
+        algo.pushSamples([batch], param: cloned ? "CLONE" : "") { [weak self] ok, err in
+            if !ok {
+                self?.appLog("App: algo push batch failed: \(err?.localizedDescription ?? "")",
+                             level: "W")
+            }
+        }
+    }
+
+    /// Clears the device's relax ring and restarts its algo state.
+    private func resetAlgo(_ ctx: DeviceContext) {
+        dataQueueLock.lock()
+        dataQueue.removeAll { $0.state === ctx.state }
+        dataQueueLock.unlock()
+        ctx.state.resetAlgo()
+    }
+
+    /// Relax poll: chained NO_HEADER reads, one in flight at a time.
+    private func refreshRelax() {
+        guard !relaxQueryPending else { return }
+        guard let ctx = currentContext,
+              ctx.state.currentBioMode() == .ppg,
+              let algo = ctx.state.currentAlgo() else { return }
+        let st = ctx.state
+        let generation = st.currentAlgoResetGeneration()
+        relaxQueryPending = true
+        algo.getResult("NO_HEADER") { [weak self, weak st] result, _ in
+            guard let self = self, let st = st else { return }
+            self.onMain {
+                self.relaxQueryPending = false
+                guard generation == st.currentAlgoResetGeneration() else {
+                    self.refreshRelax()
+                    return
+                }
+                st.appendRelaxRow(result)
+                self.refreshRelax()
+            }
         }
     }
 
@@ -597,19 +676,21 @@ final class AppModel: NSObject, ObservableObject {
     // MARK: connect chain
 
     /// Per-device connect/disconnect from the scan-list row button.
-    func toggleConnect(mac: String) {
+    @MainActor
+    func toggleConnect(mac: String) async {
         let reconnecting = autoReconnectingMacs.contains(mac)
         if let ctx = context(for: mac), ctx.connected || reconnecting {
             disconnect(mac: mac)
         } else if devices.contains(where: { $0.mac == mac }) {
-            connect(mac: mac)
+            await connect(mac: mac)
         } else {
             appLog("User: connect rejected (no device selected)", level: "W")
             statusText = "Select a device first"
         }
     }
 
-    private func connect(mac: String, restoreParams: Bool = false) {
+    @MainActor
+    private func connect(mac: String, restoreParams: Bool = false) async {
         controller.stopScan()
         scanning = false
 
@@ -641,25 +722,22 @@ final class AppModel: NSObject, ObservableObject {
             connectionText = "Connecting..."
         }
         if p.isReady {
-            startReadyFlow(p)
+            await startReadyFlow(p)
             return
         }
-        p.connect { [weak self] ok, err in
-            self?.onMain {
-                guard let self = self else { return }
-                guard ok else {
-                    self.appLog("App: failed to connect to \(name) (\(mac))", level: "E", profile: p)
-                    self.statusText = "Connect failed: \(err?.localizedDescription ?? "")"
-                    self.syncMirrors()
-                    return
-                }
-                self.startReadyFlow(p)
-            }
+        do {
+            _ = try await p.connect()
+            await startReadyFlow(p)
+        } catch {
+            appLog("App: failed to connect to \(name) (\(mac))", level: "E", profile: p)
+            statusText = "Connect failed: \(error.localizedDescription)"
+            syncMirrors()
         }
     }
 
     /// Ready-state entry: runs the connect chain once per session.
-    private func startReadyFlow(_ p: SensorProfile) {
+    @MainActor
+    private func startReadyFlow(_ p: SensorProfile) async {
         guard let ctx = context(for: p.device.mac) else { return }
         guard !ctx.flowStarted else {
             if ctx === currentContext {
@@ -670,28 +748,20 @@ final class AppModel: NSObject, ObservableObject {
         ctx.flowStarted = true
         if !p.hasInited {
             statusText = "Initializing \(p.device.name)..."
-            startInitChain(p)
-        } else {
-            afterInit(p)
-        }
-    }
-
-    private func startInitChain(_ p: SensorProfile) {
-        p.`init`(32, timeout: 5, powerRefreshInterval: 60) { [weak self] ok, err in
-            self?.onMain {
-                guard let self = self else { return }
-                guard ok else {
-                    self.appLog("App: failed to initialize \(p.device.name) (\(p.device.mac))",
-                                level: "E", profile: p)
-                    self.statusText = "Init failed: \(err?.localizedDescription ?? "")"
-                    return
-                }
-                self.afterInit(p)
+            do {
+                _ = try await p.`init`(32, timeout: 5, powerRefreshInterval: 60)
+            } catch {
+                appLog("App: failed to initialize \(p.device.name) (\(p.device.mac))",
+                       level: "E", profile: p)
+                statusText = "Init failed: \(error.localizedDescription)"
+                return
             }
         }
+        await afterInit(p)
     }
 
-    private func afterInit(_ p: SensorProfile) {
+    @MainActor
+    private func afterInit(_ p: SensorProfile) async {
         guard let ctx = context(for: p.device.mac) else { return }
         guard let info = p.deviceInfo else { return }
         ctx.info = info
@@ -702,42 +772,41 @@ final class AppModel: NSObject, ObservableObject {
         ctx.state.seedBioMode(from: info)
         syncMirrors()
 
-        p.getParam(5, key: "NTF") { [weak self] result, _ in
-            self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
-        }
-        p.getParam(5, key: "FILTER") { [weak self] result, _ in
-            self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
-        }
-        refreshEegSampleRateState(p, for: ctx)
-        refreshAuxSampleRateStates(p, for: ctx)
-
-        p.getBatteryLevel(5) { [weak self] level, _ in
-            self?.onMain { _ = self?.filteredBattery(Int(level), for: ctx) }
-        }
+        await readbackParam(p, key: "NTF", keys: AppModel.ntfKeys, for: ctx)
+        await readbackParam(p, key: "FILTER", keys: AppModel.filterKeys, for: ctx)
+        await refreshEegSampleRateState(p, for: ctx)
+        await refreshAuxSampleRateStates(p, for: ctx)
+        let level = try? await p.getBatteryLevel(5)
+        _ = filteredBattery(Int(level ?? -1), for: ctx)
 
         if p.isDataTransfering {
-            finishStart(p, ok: true, err: nil)
+            await finishStart(p, ok: true, err: nil)
         } else {
             statusText = "Starting data notification..."
-            p.startDataNotification(10) { [weak self] ok, err in
-                self?.onMain { self?.finishStart(p, ok: ok, err: err) }
+            do {
+                _ = try await p.startDataNotification(10)
+                await finishStart(p, ok: true, err: nil)
+            } catch {
+                await finishStart(p, ok: false, err: error)
             }
         }
     }
 
     /// Stream-start tail of the connect chain.
-    private func finishStart(_ p: SensorProfile, ok: Bool, err: Error?) {
+    @MainActor
+    private func finishStart(_ p: SensorProfile, ok: Bool, err: Error?) async {
         guard let ctx = context(for: p.device.mac) else { return }
         if ok {
             appLog("App: device connected and streaming: \(p.device.name) (\(p.device.mac))",
                    profile: p)
             statusText = "Streaming (\(p.device.name))"
-            applySessionParams(ctx) { [weak self] in
-                guard let self = self else { return }
-                guard self.pendingParamRestore.remove(p.device.mac) != nil else { return }
-                ctx.state.clearBuffers()
-                self.restoreSavedParams(p, for: ctx)
+            await applySessionParams(ctx)
+            guard pendingParamRestore.remove(p.device.mac) != nil else {
+                syncMirrors()
+                return
             }
+            ctx.state.clearBuffers()
+            await restoreSavedParams(p, for: ctx)
         } else {
             appLog("App: failed to start data stream on \(p.device.mac)",
                    level: "E", profile: p)
@@ -771,7 +840,8 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    func multiStart() {
+    @MainActor
+    func multiStart() async {
         let targets = readyContexts()
         guard !targets.isEmpty else {
             appLog("User: multi start rejected (no ready device)", level: "W")
@@ -779,40 +849,36 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         appLog("User: multi start (\(targets.count) device(s))")
+        await runMultiStart(targets)
+    }
+
+    /// Stop-already-streaming restart semantics, then the synced group start.
+    @MainActor
+    private func runMultiStart(_ targets: [DeviceContext]) async {
         let streaming = targets.filter { $0.profile.isDataTransfering }.map { $0.profile }
-        guard !streaming.isEmpty else {
-            startMulti(targets)
-            return
-        }
-        controller.multiStopDataNotification(streaming, timeoutMs: 10000) { [weak self] results, _ in
-            let failed = results.filter { !$0.value.boolValue }.map { $0.key }
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                guard failed.isEmpty else {
-                    let macs = failed.joined(separator: ", ")
-                    self.appLog("App: multi start aborted, stop failed on: \(macs)", level: "W")
-                    self.statusText = "Multi start aborted: stop failed on \(macs)"
-                    return
-                }
-                self.startMulti(targets)
+        if !streaming.isEmpty {
+            let (results, _) = await controller.multiStopDataNotification(streaming, timeoutMs: 10000)
+            let failed = (results ?? [:]).filter { !$0.value.boolValue }.map { $0.key }
+            guard failed.isEmpty else {
+                let macs = failed.joined(separator: ", ")
+                appLog("App: multi start aborted, stop failed on: \(macs)", level: "W")
+                statusText = "Multi start aborted: stop failed on \(macs)"
+                return
             }
         }
+        await startMulti(targets)
     }
 
-    private func startMulti(_ targets: [DeviceContext]) {
+    @MainActor
+    private func startMulti(_ targets: [DeviceContext]) async {
         statusText = "Multi starting ..."
-        controller.multiStartDataNotification(targets.map { $0.profile },
-                                              timeoutMs: 0,
-                                              maxDelayDispersionMs: -1,
-                                              maxAttempts: 1) { [weak self] results, errors in
-            DispatchQueue.main.async {
-                self?.reportMulti("start", total: targets.count,
-                                  results: results, errors: errors)
-            }
-        }
+        let (results, errors) = await controller.multiStartDataNotification(
+            targets.map { $0.profile }, timeoutMs: 0, maxDelayDispersionMs: -1, maxAttempts: 1)
+        reportMulti("start", total: targets.count, results: results, errors: errors)
     }
 
-    func multiStop() {
+    @MainActor
+    func multiStop() async {
         let targets = readyContexts().filter { $0.streaming }
         guard !targets.isEmpty else {
             appLog("User: multi stop rejected (no streaming device)", level: "W")
@@ -821,13 +887,9 @@ final class AppModel: NSObject, ObservableObject {
         }
         appLog("User: multi stop (\(targets.count) device(s))")
         statusText = "Multi stopping ..."
-        controller.multiStopDataNotification(targets.map { $0.profile },
-                                             timeoutMs: 10000) { [weak self] results, errors in
-            DispatchQueue.main.async {
-                self?.reportMulti("stop", total: targets.count,
-                                  results: results, errors: errors)
-            }
-        }
+        let (results, errors) = await controller.multiStopDataNotification(
+            targets.map { $0.profile }, timeoutMs: 10000)
+        reportMulti("stop", total: targets.count, results: results, errors: errors)
     }
 
     /// Per-device multi-op result line.
@@ -847,22 +909,23 @@ final class AppModel: NSObject, ObservableObject {
     // MARK: dongle setup check
 
     /// Runs the dongle setup check; the result shows in a dialog.
-    func checkDongle() {
+    @MainActor
+    func checkDongle() async {
         appLog("User: check setup dongle")
         checkingDongle = true
-        controller.checkSetupDongle { [weak self] result, err in
-            let text = err.map { "Error: \($0.localizedDescription)" } ?? result
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.checkingDongle = false
-                self.appLog("App: check dongle result: \(text.components(separatedBy: "\n").first ?? text)")
-                self.contextsLock.lock()
-                let anyConnected = self.contexts.values.contains { $0.connected }
-                self.contextsLock.unlock()
-                self.dongleCheckMessage = "Backend: \(self.backendName)\n"
-                    + Self.dongleCheckText(text, anyConnected: anyConnected)
-            }
+        let text: String
+        do {
+            text = try await controller.checkSetupDongle()
+        } catch {
+            text = "Error: \(error.localizedDescription)"
         }
+        checkingDongle = false
+        appLog("App: check dongle result: \(text.components(separatedBy: "\n").first ?? text)")
+        contextsLock.lock()
+        let anyConnected = contexts.values.contains { $0.connected }
+        contextsLock.unlock()
+        dongleCheckMessage = "Backend: \(backendName)\n"
+            + Self.dongleCheckText(text, anyConnected: anyConnected)
     }
 
     private static func dongleCheckText(_ result: String, anyConnected: Bool) -> String {
@@ -914,189 +977,158 @@ final class AppModel: NSObject, ObservableObject {
     // MARK: EEG sample rate (getParam/setParam "EEG_SAMPLE_RATE")
 
     /// Re-reads the option list and the current bound rate.
-    private func refreshEegSampleRateState(_ p: SensorProfile, for ctx: DeviceContext) {
-        p.getParam(5, key: "EEG_SAMPLE_RATE_LIST") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                ctx.eegSampleRateOptions = result.hasPrefix("Error")
-                    ? [] : result.split(separator: "|").compactMap { Int($0) }
-                if ctx === self.currentContext {
-                    self.eegSampleRateOptions = ctx.eegSampleRateOptions
-                }
-            }
+    /// Reads one sample-rate option list; failure answers an empty list.
+    private func readSampleRateOptions(_ p: SensorProfile, key: String) async -> [Int] {
+        guard let result = try? await p.getParam(5, key: key) else { return [] }
+        return result.split(separator: "|").compactMap { Int($0) }
+    }
+
+    /// Reads one bound sample rate; failure or a non-numeric answer is nil.
+    private func readSampleRate(_ p: SensorProfile, key: String) async -> Int? {
+        guard let result = try? await p.getParam(5, key: key) else { return nil }
+        return Int(result)
+    }
+
+    /// Re-reads one aggregate and applies it to the switch states.
+    @MainActor
+    private func readbackParam(_ p: SensorProfile, key: String, keys: [String], for ctx: DeviceContext) async {
+        do {
+            let result = try await p.getParam(5, key: key)
+            applyParamReadback(result, keys: keys, for: ctx)
+        } catch {
+            applyParamReadback("Error: \(error.localizedDescription)", keys: keys, for: ctx)
         }
-        p.getParam(5, key: "EEG_SAMPLE_RATE") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                if !result.hasPrefix("Error"), let rate = Int(result) {
-                    ctx.eegSampleRate = rate
-                    if ctx === self.currentContext {
-                        self.eegSampleRate = rate
-                    }
-                }
+    }
+
+    @MainActor
+    private func refreshEegSampleRateState(_ p: SensorProfile, for ctx: DeviceContext) async {
+        let options = await readSampleRateOptions(p, key: "EEG_SAMPLE_RATE_LIST")
+        let rate = await readSampleRate(p, key: "EEG_SAMPLE_RATE")
+        ctx.eegSampleRateOptions = options
+        if ctx === currentContext {
+            eegSampleRateOptions = options
+        }
+        if let rate = rate {
+            ctx.eegSampleRate = rate
+            if ctx === currentContext {
+                eegSampleRate = rate
             }
         }
     }
 
-    func setEegSampleRate(_ rate: Int) {
+    func setEegSampleRate(_ rate: Int) async {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
         guard rate != eegSampleRate, eegSampleRateOptions.contains(rate) else { return }
         ctx.eegSampleRate = rate
         eegSampleRate = rate
-        let p = ctx.profile
-        DispatchQueue.main.async { [weak self] in
-            self?.applySampleRate(p, key: "EEG_SAMPLE_RATE", rate: rate, for: ctx)
-        }
+        await applySampleRate(ctx.profile, key: "EEG_SAMPLE_RATE", rate: rate, for: ctx)
     }
 
     // MARK: EMG/IMU/PPG sample rates
 
     /// Re-reads the option lists and the current bound rates.
-    private func refreshAuxSampleRateStates(_ p: SensorProfile, for ctx: DeviceContext) {
-        p.getParam(5, key: "EMG_SAMPLE_RATE_LIST") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                ctx.emgSampleRateOptions = result.hasPrefix("Error")
-                    ? [] : result.split(separator: "|").compactMap { Int($0) }
-                if ctx === self.currentContext {
-                    self.emgSampleRateOptions = ctx.emgSampleRateOptions
-                }
+    @MainActor
+    private func refreshAuxSampleRateStates(_ p: SensorProfile, for ctx: DeviceContext) async {
+        let emgOptions = await readSampleRateOptions(p, key: "EMG_SAMPLE_RATE_LIST")
+        let emgRate = await readSampleRate(p, key: "EMG_SAMPLE_RATE")
+        let imuOptions = await readSampleRateOptions(p, key: "IMU_SAMPLE_RATE_LIST")
+        let imuRate = await readSampleRate(p, key: "IMU_SAMPLE_RATE")
+        let ppgOptions = await readSampleRateOptions(p, key: "PPG_SAMPLE_RATE_LIST")
+        let ppgRate = await readSampleRate(p, key: "PPG_SAMPLE_RATE")
+        ctx.emgSampleRateOptions = emgOptions
+        if ctx === currentContext {
+            emgSampleRateOptions = emgOptions
+        }
+        if let emgRate = emgRate {
+            ctx.emgSampleRate = emgRate
+            if ctx === currentContext {
+                emgSampleRate = emgRate
             }
         }
-        p.getParam(5, key: "EMG_SAMPLE_RATE") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                if !result.hasPrefix("Error"), let rate = Int(result) {
-                    ctx.emgSampleRate = rate
-                    if ctx === self.currentContext {
-                        self.emgSampleRate = rate
-                    }
-                }
+        ctx.imuSampleRateOptions = imuOptions
+        if ctx === currentContext {
+            imuSampleRateOptions = imuOptions
+        }
+        if let imuRate = imuRate {
+            ctx.imuSampleRate = imuRate
+            if ctx === currentContext {
+                imuSampleRate = imuRate
             }
         }
-        p.getParam(5, key: "IMU_SAMPLE_RATE_LIST") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                ctx.imuSampleRateOptions = result.hasPrefix("Error")
-                    ? [] : result.split(separator: "|").compactMap { Int($0) }
-                if ctx === self.currentContext {
-                    self.imuSampleRateOptions = ctx.imuSampleRateOptions
-                }
-            }
+        ctx.ppgSampleRateOptions = ppgOptions
+        if ctx === currentContext {
+            ppgSampleRateOptions = ppgOptions
         }
-        p.getParam(5, key: "IMU_SAMPLE_RATE") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                if !result.hasPrefix("Error"), let rate = Int(result) {
-                    ctx.imuSampleRate = rate
-                    if ctx === self.currentContext {
-                        self.imuSampleRate = rate
-                    }
-                }
-            }
-        }
-        p.getParam(5, key: "PPG_SAMPLE_RATE_LIST") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                ctx.ppgSampleRateOptions = result.hasPrefix("Error")
-                    ? [] : result.split(separator: "|").compactMap { Int($0) }
-                if ctx === self.currentContext {
-                    self.ppgSampleRateOptions = ctx.ppgSampleRateOptions
-                }
-            }
-        }
-        p.getParam(5, key: "PPG_SAMPLE_RATE") { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                if !result.hasPrefix("Error"), let rate = Int(result) {
-                    ctx.ppgSampleRate = rate
-                    if ctx === self.currentContext {
-                        self.ppgSampleRate = rate
-                    }
-                }
+        if let ppgRate = ppgRate {
+            ctx.ppgSampleRate = ppgRate
+            if ctx === currentContext {
+                ppgSampleRate = ppgRate
             }
         }
     }
 
-    func setEmgSampleRate(_ rate: Int) {
+    func setEmgSampleRate(_ rate: Int) async {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
         guard rate != emgSampleRate, emgSampleRateOptions.contains(rate) else { return }
         ctx.emgSampleRate = rate
         emgSampleRate = rate
-        let p = ctx.profile
-        DispatchQueue.main.async { [weak self] in
-            self?.applySampleRate(p, key: "EMG_SAMPLE_RATE", rate: rate, for: ctx)
-        }
+        await applySampleRate(ctx.profile, key: "EMG_SAMPLE_RATE", rate: rate, for: ctx)
     }
 
-    func setImuSampleRate(_ rate: Int) {
+    func setImuSampleRate(_ rate: Int) async {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
         guard rate != imuSampleRate, imuSampleRateOptions.contains(rate) else { return }
         ctx.imuSampleRate = rate
         imuSampleRate = rate
-        let p = ctx.profile
-        DispatchQueue.main.async { [weak self] in
-            self?.applySampleRate(p, key: "IMU_SAMPLE_RATE", rate: rate, for: ctx)
-        }
+        await applySampleRate(ctx.profile, key: "IMU_SAMPLE_RATE", rate: rate, for: ctx)
     }
 
-    func setPpgSampleRate(_ rate: Int) {
+    func setPpgSampleRate(_ rate: Int) async {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
         guard rate != ppgSampleRate, ppgSampleRateOptions.contains(rate) else { return }
         ctx.ppgSampleRate = rate
         ppgSampleRate = rate
-        let p = ctx.profile
-        DispatchQueue.main.async { [weak self] in
-            self?.applySampleRate(p, key: "PPG_SAMPLE_RATE", rate: rate, for: ctx)
-        }
+        await applySampleRate(ctx.profile, key: "PPG_SAMPLE_RATE", rate: rate, for: ctx)
     }
 
     /// Sends the sample-rate setParam; failure reverts through a re-read.
-    private func applySampleRate(_ p: SensorProfile, key: String, rate: Int, for ctx: DeviceContext) {
+    @MainActor
+    private func applySampleRate(_ p: SensorProfile, key: String, rate: Int, for ctx: DeviceContext) async {
         guard ctx.connected, !ctx.isReplay else { return }
-        p.setParam(5, key: key, value: "\(rate)") { [weak self] result, err in
-            self?.onMain {
-                guard let self = self else { return }
-                self.appLog("User: setParam(\(key), \(rate)) -> \(result)", profile: p)
-                self.recordSavedParam(ctx.mac, key: key, value: "\(rate)", result: result)
-                if err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:") {
-                    self.statusText = "\(key) failed: \(err?.localizedDescription ?? result)"
-                } else {
-                    ctx.state.clearBuffers()
-                }
-                self.refreshEegSampleRateState(p, for: ctx)
-                self.refreshAuxSampleRateStates(p, for: ctx)
-            }
+        do {
+            let result = try await p.setParam(5, key: key, value: "\(rate)")
+            appLog("User: setParam(\(key), \(rate)) -> \(result)", profile: p)
+            recordSavedParam(ctx.mac, key: key, value: "\(rate)", result: result)
+            ctx.state.clearBuffers()
+        } catch {
+            appLog("User: setParam(\(key), \(rate)) failed: \(error.localizedDescription)", profile: p)
+            statusText = "\(key) failed: \(error.localizedDescription)"
         }
+        await refreshEegSampleRateState(p, for: ctx)
+        await refreshAuxSampleRateStates(p, for: ctx)
     }
 
     // MARK: setParam
 
-    func setParamToggle(key: String, on: Bool) {
+    @MainActor
+    func setParamToggle(key: String, on: Bool) async {
         guard let ctx = currentContext, ctx.connected, !ctx.isReplay else { return }
         let p = ctx.profile
         let value = on ? "ON" : "OFF"
-        p.setParam(5, key: key, value: value) { [weak self] result, err in
-            self?.onMain {
-                guard let self = self else { return }
-                self.appLog("User: setParam(\(key), \(value)) -> \(result)", profile: p)
-                self.recordSavedParam(ctx.mac, key: key, value: value, result: result)
-                let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
-                if failed {
-                    self.statusText = "\(key) failed: \(err?.localizedDescription ?? result)"
-                } else {
-                    ctx.state.clearBuffers()
-                }
-                if AppModel.ntfKeys.contains(key) {
-                    p.getParam(5, key: "NTF") { [weak self] result, _ in
-                        self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
-                    }
-                } else {
-                    p.getParam(5, key: "FILTER") { [weak self] result, _ in
-                        self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
-                    }
-                }
-            }
+        do {
+            let result = try await p.setParam(5, key: key, value: value)
+            appLog("User: setParam(\(key), \(value)) -> \(result)", profile: p)
+            recordSavedParam(ctx.mac, key: key, value: value, result: result)
+            ctx.state.clearBuffers()
+        } catch {
+            appLog("User: setParam(\(key), \(value)) failed: \(error.localizedDescription)",
+                    profile: p)
+            statusText = "\(key) failed: \(error.localizedDescription)"
+        }
+        if AppModel.ntfKeys.contains(key) {
+            await readbackParam(p, key: "NTF", keys: AppModel.ntfKeys, for: ctx)
+        } else {
+            await readbackParam(p, key: "FILTER", keys: AppModel.filterKeys, for: ctx)
         }
     }
 
@@ -1113,31 +1145,23 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     /// Replays the recorded setParam history, then re-syncs the controls.
-    private func restoreSavedParams(_ p: SensorProfile, for ctx: DeviceContext) {
+    @MainActor
+    private func restoreSavedParams(_ p: SensorProfile, for ctx: DeviceContext) async {
         let params = savedParamsByMac[p.device.mac] ?? []
-        var step: ((Int) -> Void)?
-        step = { [weak self] index in
-            guard let self = self else { return }
-            guard index < params.count else {
-                step = nil
-                p.getParam(5, key: "NTF") { [weak self] result, _ in
-                    self?.onMain { self?.applyParamReadback(result, keys: AppModel.ntfKeys, for: ctx) }
-                }
-                p.getParam(5, key: "FILTER") { [weak self] result, _ in
-                    self?.onMain { self?.applyParamReadback(result, keys: AppModel.filterKeys, for: ctx) }
-                }
-                self.refreshEegSampleRateState(p, for: ctx)
-                self.refreshAuxSampleRateStates(p, for: ctx)
-                return
-            }
-            let param = params[index]
-            p.setParam(5, key: param.key, value: param.value) { [weak self] result, _ in
-                self?.appLog("App: restore setParam(\(param.key), \(param.value)) -> \(result)",
-                             profile: p)
-                self?.onMain { step?(index + 1) }
+        for param in params {
+            do {
+                let result = try await p.setParam(5, key: param.key, value: param.value)
+                appLog("App: restore setParam(\(param.key), \(param.value)) -> \(result)",
+                       profile: p)
+            } catch {
+                appLog("App: restore setParam(\(param.key), \(param.value)) failed: \(error.localizedDescription)",
+                       level: "E", profile: p)
             }
         }
-        step?(0)
+        await readbackParam(p, key: "NTF", keys: AppModel.ntfKeys, for: ctx)
+        await readbackParam(p, key: "FILTER", keys: AppModel.filterKeys, for: ctx)
+        await refreshEegSampleRateState(p, for: ctx)
+        await refreshAuxSampleRateStates(p, for: ctx)
     }
 
     private func applyParamReadback(_ result: String, keys: [String], for ctx: DeviceContext) {
@@ -1287,75 +1311,65 @@ final class AppModel: NSObject, ObservableObject {
 
     /// Per-device session params: the profile log redirect and the bin-data
     /// recording.
-    private func applySessionParams(_ ctx: DeviceContext, completion: (() -> Void)? = nil) {
+    @MainActor
+    private func applySessionParams(_ ctx: DeviceContext) async {
         if debugLogEnabled {
-            applyDebugLogPath(for: ctx) { [weak self] in
-                guard let self = self else { return }
-                if self.debugBinEnabled {
-                    self.applyDebugBin(for: ctx, completion: completion)
-                } else {
-                    completion?()
-                }
-            }
-        } else if debugBinEnabled {
-            applyDebugBin(for: ctx, completion: completion)
-        } else {
-            completion?()
+            await applyDebugLogPath(for: ctx)
+        }
+        if debugBinEnabled {
+            await applyDebugBin(for: ctx)
         }
     }
 
-    private func applyDebugLogPath(for ctx: DeviceContext, completion: (() -> Void)? = nil) {
+    @MainActor
+    private func applyDebugLogPath(for ctx: DeviceContext) async {
         let p = ctx.profile
-        guard ctx.connected, p.hasInited else { completion?(); return }
+        guard ctx.connected, p.hasInited else { return }
         let mac = ctx.mac
         let path = lastLogPaths[mac] ?? "True"
-        p.setParam(5, key: "DEBUG_LOG_PATH", value: path) { [weak self] result, err in
-            self?.onMain {
-                guard let self = self else { return }
-                self.appLog("App: setParam(DEBUG_LOG_PATH, \(path)) -> \(result)", profile: p)
-                let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
-                if !failed {
-                    p.getParam(5, key: "DEBUG_LOG_PATH") { [weak self] result, _ in
-                        self?.onMain {
-                            if !result.isEmpty && !result.hasPrefix("Error") {
-                                self?.lastLogPaths[mac] = result
-                            }
-                        }
-                    }
-                }
-                completion?()
+        do {
+            let result = try await p.setParam(5, key: "DEBUG_LOG_PATH", value: path)
+            appLog("App: setParam(DEBUG_LOG_PATH, \(path)) -> \(result)", profile: p)
+            let resolved = try await p.getParam(5, key: "DEBUG_LOG_PATH")
+            if !resolved.isEmpty {
+                lastLogPaths[mac] = resolved
+                ctx.state.openAlgoCsv(deviceLogPath: resolved)
             }
+        } catch {
+            appLog("App: setParam(DEBUG_LOG_PATH, \(path)) failed: \(error.localizedDescription)",
+                   level: "E", profile: p)
         }
     }
 
-    private func applyDebugBin(for ctx: DeviceContext, completion: (() -> Void)? = nil) {
+    @MainActor
+    private func applyDebugBin(for ctx: DeviceContext) async {
         let p = ctx.profile
-        guard ctx.connected, p.hasInited else { completion?(); return }
+        guard ctx.connected, p.hasInited else { return }
         let mac = ctx.mac
         let path = lastDataPaths[mac] ?? "True"
-        p.setParam(5, key: "DEBUG_BLE_DATA_PATH", value: path) { [weak self] result, err in
-            self?.onMain {
-                guard let self = self else { return }
-                self.appLog("App: setParam(DEBUG_BLE_DATA_PATH, \(path)) -> \(result)", profile: p)
-                let failed = err != nil || result.hasPrefix("Error") || result.hasPrefix("ERROR:")
-                if !failed {
-                    p.getParam(5, key: "DEBUG_BLE_DATA_PATH") { [weak self] result, _ in
-                        self?.onMain {
-                            if !result.isEmpty && !result.hasPrefix("Error") {
-                                self?.lastDataPaths[mac] = result
-                            }
-                        }
-                    }
-                }
-                completion?()
+        do {
+            let result = try await p.setParam(5, key: "DEBUG_BLE_DATA_PATH", value: path)
+            appLog("App: setParam(DEBUG_BLE_DATA_PATH, \(path)) -> \(result)", profile: p)
+            let resolved = try await p.getParam(5, key: "DEBUG_BLE_DATA_PATH")
+            if !resolved.isEmpty {
+                lastDataPaths[mac] = resolved
             }
+        } catch {
+            appLog("App: setParam(DEBUG_BLE_DATA_PATH, \(path)) failed: \(error.localizedDescription)",
+                   level: "E", profile: p)
         }
     }
 
     /// Literal True/False session-param write for the debug toggles.
     private func sendSessionParam(_ p: SensorProfile, key: String, value: String) {
-        p.setParam(5, key: key, value: value) { [weak self] result, _ in
-            self?.appLog("App: setParam(\(key), \(value)) -> \(result)", profile: p)
+        Task {
+            do {
+                let result = try await p.setParam(5, key: key, value: value)
+                self.appLog("App: setParam(\(key), \(value)) -> \(result)", profile: p)
+            } catch {
+                self.appLog("App: setParam(\(key), \(value)) failed: \(error.localizedDescription)",
+                            level: "E", profile: p)
+            }
         }
     }
 
@@ -1371,17 +1385,17 @@ final class AppModel: NSObject, ObservableObject {
             }()
             let version = controller.getVersion().replacingOccurrences(of: ".", with: "_")
             let path = dir.appendingPathComponent("sensorsdklog/\(stamp)_\(version)").path
-            controller.setParam("LOG_PATH", value: path, completion: nil)
+            Task { _ = try? await controller.setParam("LOG_PATH", value: path) }
             storageText = "Logs & bins: \(path)"
         } else {
             storageText = ""
         }
-        controller.setParam("DEBUG_ENABLED", value: debugLogEnabled ? "True" : "False", completion: nil)
+        Task { _ = try? await controller.setParam("DEBUG_ENABLED", value: debugLogEnabled ? "True" : "False") }
     }
 
     private func applyDongleDebug() {
 #if os(macOS)
-        controller.setParam("BLE_TRACE_ENABLED", value: dongleDebugEnabled ? "True" : "False", completion: nil)
+        Task { _ = try? await controller.setParam("BLE_TRACE_ENABLED", value: dongleDebugEnabled ? "True" : "False") }
 #endif
     }
 
@@ -1614,7 +1628,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     /// Parses a bin file to CSV next to it.
-    func parseBinToCsv(url: URL) {
+    @MainActor
+    func parseBinToCsv(url: URL) async {
         guard !analyzing else { return }
         let accessing = url.startAccessingSecurityScopedResource()
         let binPath = url.path
@@ -1623,26 +1638,32 @@ final class AppModel: NSObject, ObservableObject {
         analyzing = true
         if accessing { parseScopedUrls.append(url) }
         replayText = "Analyzing: \(url.lastPathComponent) ..."
-        controller.parseBin(toCsv: binPath, csvPath: csvPath) { [weak self] result, _ in
-            self?.onMain {
-                guard let self = self else { return }
-                self.analyzing = false
-                for scopedUrl in self.parseScopedUrls {
-                    scopedUrl.stopAccessingSecurityScopedResource()
-                }
-                self.parseScopedUrls.removeAll()
-                if result.hasPrefix("Error") {
-                    self.appLog("App: analyze failed: \(result)", level: "E")
-                    self.replayText = "Analyze failed: \(result)"
-                } else {
-                    self.appLog("App: CSV saved: \(result)")
-                    self.replayText = "CSV saved: \(result)"
-                    #if os(macOS)
-                    NSWorkspace.shared.selectFile(
-                        result, inFileViewerRootedAtPath: (result as NSString).deletingLastPathComponent)
-                    #endif
-                }
-            }
+        let result: String
+        do {
+            result = try await controller.parseBin(toCsv: binPath, csvPath: csvPath)
+        } catch {
+            result = "Error: \(error.localizedDescription)"
+        }
+        finishAnalyze(result: result)
+    }
+
+    /// Analyze tail: releases the scoped URLs and reports the outcome.
+    private func finishAnalyze(result: String) {
+        analyzing = false
+        for scopedUrl in parseScopedUrls {
+            scopedUrl.stopAccessingSecurityScopedResource()
+        }
+        parseScopedUrls.removeAll()
+        if result.hasPrefix("Error") {
+            appLog("App: analyze failed: \(result)", level: "E")
+            replayText = "Analyze failed: \(result)"
+        } else {
+            appLog("App: CSV saved: \(result)")
+            replayText = "CSV saved: \(result)"
+            #if os(macOS)
+            NSWorkspace.shared.selectFile(
+                result, inFileViewerRootedAtPath: (result as NSString).deletingLastPathComponent)
+            #endif
         }
     }
 }
@@ -1674,11 +1695,11 @@ extension AppModel: SensorProfileDelegate {
         dataModeLock.unlock()
         if cloning {
             for b in dataList {
-                enqueueData(ctx.state, b.clone())
+                enqueueData(ctx.state, b.clone(), cloned: true)
             }
         } else {
             for b in dataList {
-                enqueueData(ctx.state, b)
+                enqueueData(ctx.state, b, cloned: false)
             }
         }
     }
@@ -1696,7 +1717,7 @@ extension AppModel: SensorProfileDelegate {
                 let mac = profile.device.mac
                 self.disconnectingMacs.remove(mac)
                 self.autoReconnectingMacs.remove(mac)
-                self.startReadyFlow(profile)
+                Task { await self.startReadyFlow(profile) }
                 self.syncMirrors()
             case .disconnected:
                 self.handleDisconnected(profile)
@@ -1764,7 +1785,7 @@ extension AppModel: SensorProfileDelegate {
         if devices.contains(where: { $0.mac == mac }) {
             selectedMac = mac
         }
-        connect(mac: mac, restoreParams: restore)
+        Task { await self.connect(mac: mac, restoreParams: restore) }
     }
 
     func onError(_ profile: SensorProfile, err: Error) {
@@ -1791,6 +1812,9 @@ extension AppModel: SensorProfileDelegate {
         onMain {
             guard let ctx = self.context(for: profile.device.mac) else { return }
             ctx.streaming = isTransferring
+            if isTransferring {
+                self.resetAlgo(ctx)
+            }
             self.syncMirrors()
             let mac = profile.device.mac
             guard self.replayProfiles[mac] != nil else { return }
